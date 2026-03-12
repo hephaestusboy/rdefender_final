@@ -1,50 +1,40 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec file for R-Defender - With mscerts data files bundled
-
-import os
-import sys
+# PyInstaller spec file for R-Defender
 
 block_cipher = None
-
-# Find mscerts location
-try:
-    import mscerts
-    mscerts_path = os.path.dirname(mscerts.__file__)
-except ImportError:
-    mscerts_path = None
-    print("WARNING: mscerts not found - certificate validation may fail")
-
-# Build datas list
-datas = [
-    ('rf_behavior_model.joblib', '.'),
-    ('rf_artifact_model.joblib', '.'),
-    ('xgb_behavior_model.joblib', '.'),
-    ('xgb_artifact_model.joblib', '.'),
-    ('fusion_model.joblib', '.'),
-]
-
-# Add mscerts data files if found
-if mscerts_path:
-    datas.append((mscerts_path, 'mscerts'))
-    print(f"Including mscerts from: {mscerts_path}")
 
 a = Analysis(
     ['rdefender_ui_clr_copy.py'],
     pathex=[],
     binaries=[],
-    datas=datas,
+    datas=[
+        ('rf_behavior_model.joblib', '.'),
+        ('rf_artifact_model.joblib', '.'),
+        ('xgb_behavior_model.joblib', '.'),
+        ('xgb_artifact_model.joblib', '.'),
+        ('fusion_model.joblib', '.'),
+        (r'C:\Users\vboxuser\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\mscerts', 'mscerts'),
+        (r'C:\Users\vboxuser\Desktop\rdefender_final\rdefender_final\venv\Lib\site-packages\xgboost', 'xgboost'),
+    ],
     hiddenimports=[
         'sklearn',
         'sklearn.ensemble',
         'sklearn.tree',
+        'sklearn.calibration',
+        'sklearn.preprocessing',
+        'sklearn.linear_model',
+        'sklearn.metrics',
+        'sklearn.base',
+        'sklearn.utils',
+        'sklearn.exceptions',
         'xgboost',
+        'xgboost.sklearn',
         'joblib',
         'numpy',
+        'scipy',
         'watchdog',
         'psutil',
-        'certifi',
-        'signify',
-        'mscerts',
+	'mscerts',
     ],
     hookspath=[],
     hooksconfig={},
@@ -72,10 +62,11 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,
+    console=False,  # Set to False for GUI only (no console window)
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='rdefender_icon.ico',  # Optional: add an icon
 )
 
 coll = COLLECT(
@@ -88,3 +79,6 @@ coll = COLLECT(
     upx_exclude=[],
     name='RDefender',
 )
+
+#edited
+
