@@ -1,19 +1,38 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec file for R-Defender - CLEAN VERSION (No mscerts issues)
+# PyInstaller spec file for R-Defender - With mscerts data files bundled
+
+import os
+import sys
 
 block_cipher = None
+
+# Find mscerts location
+try:
+    import mscerts
+    mscerts_path = os.path.dirname(mscerts.__file__)
+except ImportError:
+    mscerts_path = None
+    print("WARNING: mscerts not found - certificate validation may fail")
+
+# Build datas list
+datas = [
+    ('rf_behavior_model.joblib', '.'),
+    ('rf_artifact_model.joblib', '.'),
+    ('xgb_behavior_model.joblib', '.'),
+    ('xgb_artifact_model.joblib', '.'),
+    ('fusion_model.joblib', '.'),
+]
+
+# Add mscerts data files if found
+if mscerts_path:
+    datas.append((mscerts_path, 'mscerts'))
+    print(f"Including mscerts from: {mscerts_path}")
 
 a = Analysis(
     ['rdefender_ui_clr_copy.py'],
     pathex=[],
     binaries=[],
-    datas=[
-        ('rf_behavior_model.joblib', '.'),
-        ('rf_artifact_model.joblib', '.'),
-        ('xgb_behavior_model.joblib', '.'),
-        ('xgb_artifact_model.joblib', '.'),
-        ('fusion_model.joblib', '.'),
-    ],
+    datas=datas,
     hiddenimports=[
         'sklearn',
         'sklearn.ensemble',
@@ -25,11 +44,12 @@ a = Analysis(
         'psutil',
         'certifi',
         'signify',
+        'mscerts',
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludedimports=['mscerts'],  # Explicitly exclude mscerts
+    excludedimports=[],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
