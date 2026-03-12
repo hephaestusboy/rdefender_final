@@ -1,6 +1,8 @@
 import os
 import warnings
 import logging
+import json
+import hashlib
 
 # --- KILL JOBLIB SPAM DEAD ---
 os.environ["PYTHONWARNINGS"] = "ignore"
@@ -24,6 +26,38 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 from rdefender_agent import MLScannerEngine, quarantine_file, SUPPORTED_EXTENSIONS, LOG_FILE, TARGET_WATCH_DIR
+
+# --- WHITELIST CONFIGURATION ---
+WHITELIST_FILE = "rdefender_whitelist.json"
+
+def compute_file_hash(filepath):
+    """Compute SHA256 hash of a file for whitelisting purposes."""
+    try:
+        sha256_hash = hashlib.sha256()
+        with open(filepath, "rb") as f:
+            for byte_block in iter(lambda: f.read(4096), b""):
+                sha256_hash.update(byte_block)
+        return sha256_hash.hexdigest()
+    except Exception:
+        return None
+
+def load_whitelist():
+    """Load whitelisted file hashes from disk."""
+    if os.path.exists(WHITELIST_FILE):
+        try:
+            with open(WHITELIST_FILE, 'r') as f:
+                return set(json.load(f).get("hashes", []))
+        except Exception:
+            return set()
+    return set()
+
+def save_whitelist(whitelist_set):
+    """Save whitelisted file hashes to disk."""
+    try:
+        with open(WHITELIST_FILE, 'w') as f:
+            json.dump({"hashes": list(whitelist_set)}, f, indent=2)
+    except Exception:
+        pass
 
 # ---------------- FILE MONITOR HANDLER ----------------
 class FileHandler(FileSystemEventHandler):
@@ -59,6 +93,10 @@ class RDefenderUI:
         # --- ACTIVE SCANS TRACKER ---
         self.active_scans = set()
         self.active_scans_lock = threading.Lock()
+        
+        # --- WHITELIST DATABASE ---
+        self.whitelist = load_whitelist()
+        self.whitelist_lock = threading.Lock()
 
         self.setup_styles()
         self.create_header()
@@ -122,6 +160,13 @@ class RDefenderUI:
             # 2. THE SIZE LIMIT: Skip files larger than 25 MB (Prevents Entropy Hangs)
             if os.path.getsize(filepath) > 10485760:
                 return 
+
+            # 3. WHITELIST CHECK: Skip files that have been recovered
+            file_hash = compute_file_hash(filepath)
+            if file_hash:
+                with self.whitelist_lock:
+                    if file_hash in self.whitelist:
+                        return  # File is whitelisted, skip scanning
 
             current_mtime = os.path.getmtime(filepath)
             
@@ -320,10 +365,17 @@ class RDefenderUI:
 
             os.chmod(filepath, stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)
             shutil.move(filepath, restore_path)
+            
+            # ✅ ADD TO WHITELIST: Compute hash of restored file and whitelist it
+            file_hash = compute_file_hash(restore_path)
+            if file_hash:
+                with self.whitelist_lock:
+                    self.whitelist.add(file_hash)
+                    save_whitelist(self.whitelist)
 
             time_str = datetime.now().strftime("%H:%M:%S")
             self.root.after(0, lambda: self._insert_to_tree(time_str, original_name, "RESTORED", "Un-Quarantined", "clean"))
-            messagebox.showinfo("Success", f"File safely restored to:\n{restore_path}")
+            messagebox.showinfo("Success", f"File safely restored to:\n{restore_path}\n\n✅ File added to whitelist - it will not be auto-scanned again.")
         except Exception as e:
             messagebox.showerror("Restore Error", f"Could not restore file:\n{str(e)}")
 
