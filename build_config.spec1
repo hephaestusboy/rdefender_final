@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec file for R-Defender
+# PyInstaller spec file for R-Defender - CLEAN VERSION (No mscerts issues)
 
 block_cipher = None
 
@@ -23,11 +23,13 @@ a = Analysis(
         'numpy',
         'watchdog',
         'psutil',
+        'certifi',
+        'signify',
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludedimports=[],
+    excludedimports=['mscerts'],  # Explicitly exclude mscerts
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -50,11 +52,10 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,  # Set to False for GUI only (no console window)
+    console=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='rdefender_icon.ico',  # Optional: add an icon
 )
 
 coll = COLLECT(
@@ -67,6 +68,3 @@ coll = COLLECT(
     upx_exclude=[],
     name='RDefender',
 )
-
-#edited
-
