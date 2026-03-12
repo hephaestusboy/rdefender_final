@@ -385,10 +385,23 @@ class RDefenderUI:
             messagebox.showinfo("Empty", "Quarantine vault is currently empty.")
             return
 
+        # Separate files by severity
+        malware_files = {}
+        suspicious_files = {}
+        for quarantine_name, info in metadata.items():
+            original_path = info.get("original_path", "Unknown")
+            severity = info.get("severity", "Unknown")
+            display_name = os.path.basename(original_path)
+            
+            if severity == "MALWARE":
+                malware_files[display_name] = (quarantine_name, original_path)
+            else:
+                suspicious_files[display_name] = (quarantine_name, original_path)
+
         # Create a custom dialog for multi-selection
         select_window = tk.Toplevel(self.root)
         select_window.title("Select Files to Recover")
-        select_window.geometry("700x450")
+        select_window.geometry("750x550")
         select_window.configure(bg="#0f172a")
         
         title_label = tk.Label(select_window, text="Select files to recover", font=("Segoe UI", 12, "bold"), bg="#0f172a", fg="white")
@@ -398,65 +411,86 @@ class RDefenderUI:
                              font=("Segoe UI", 9), bg="#0f172a", fg="#cbd5e1")
         info_label.pack(pady=5)
 
-        # Create listbox with scrollbar
-        frame = tk.Frame(select_window, bg="#0f172a")
-        frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=10)
+        # Container for both sections
+        container = tk.Frame(select_window, bg="#0f172a")
+        container.pack(fill=tk.BOTH, expand=True, padx=15, pady=10)
 
-        scrollbar = tk.Scrollbar(frame)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        all_files = {}
 
-        listbox = tk.Listbox(frame, selectmode=tk.MULTIPLE, yscrollcommand=scrollbar.set, 
-                            font=("Segoe UI", 9), bg="#1e293b", fg="white", 
-                            selectbackground="#3b82f6", activestyle="none")
-        listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.config(command=listbox.yview)
+        # Helper function to create category section
+        def create_category_section(parent, title, files_dict, color_tag):
+            section_frame = tk.LabelFrame(parent, text=f"{title} ({len(files_dict)})", 
+                                         bg="#0f172a", fg=color_tag, font=("Segoe UI", 10, "bold"))
+            section_frame.pack(fill=tk.BOTH, expand=True, pady=5)
 
-        # Store last selected index for Shift+Click range selection
-        last_selected_index = [None]
+            # Scrollbar
+            scrollbar = tk.Scrollbar(section_frame)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        def on_listbox_click(event):
-            """Handle Shift+Click for range selection and Ctrl+Click for multi-select."""
-            index = listbox.nearest(event.y)
-            if index < 0:
-                return
+            # Listbox
+            listbox = tk.Listbox(section_frame, selectmode=tk.MULTIPLE, yscrollcommand=scrollbar.set, 
+                                font=("Segoe UI", 9), bg="#1e293b", fg="white", 
+                                selectbackground="#3b82f6", activestyle="none", height=8)
+            listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            scrollbar.config(command=listbox.yview)
 
-            if event.state & 0x1:  # Shift key is pressed
-                # Select range from last_selected to current
-                if last_selected_index[0] is not None:
-                    start = min(last_selected_index[0], index)
-                    end = max(last_selected_index[0], index)
+            # Store last selected index for Shift+Click range selection
+            last_selected_index = [None]
+
+            def on_listbox_click(event):
+                """Handle Shift+Click for range selection and Ctrl+Click for multi-select."""
+                index = listbox.nearest(event.y)
+                if index < 0:
+                    return
+
+                if event.state & 0x1:  # Shift key is pressed
+                    if last_selected_index[0] is not None:
+                        start = min(last_selected_index[0], index)
+                        end = max(last_selected_index[0], index)
+                        listbox.selection_clear(0, tk.END)
+                        for i in range(start, end + 1):
+                            listbox.selection_set(i)
+                    else:
+                        listbox.selection_set(index)
+                    last_selected_index[0] = index
+                elif event.state & 0x4:  # Ctrl key is pressed
+                    if listbox.selection_includes(index):
+                        listbox.selection_clear(index)
+                    else:
+                        listbox.selection_set(index)
+                    last_selected_index[0] = index
+                else:
                     listbox.selection_clear(0, tk.END)
-                    for i in range(start, end + 1):
-                        listbox.selection_set(i)
-                else:
                     listbox.selection_set(index)
-                last_selected_index[0] = index
-            elif event.state & 0x4:  # Ctrl key is pressed
-                # Toggle selection of clicked item
-                if listbox.selection_includes(index):
-                    listbox.selection_clear(index)
-                else:
-                    listbox.selection_set(index)
-                last_selected_index[0] = index
-            else:
-                # Regular click - select only this item
-                listbox.selection_clear(0, tk.END)
-                listbox.selection_set(index)
-                last_selected_index[0] = index
+                    last_selected_index[0] = index
 
-        listbox.bind("<Button-1>", on_listbox_click)
+            listbox.bind("<Button-1>", on_listbox_click)
 
-        # Add files to listbox
-        file_mapping = {}
-        for quarantine_name, info in metadata.items():
-            original_path = info.get("original_path", "Unknown")
-            severity = info.get("severity", "Unknown")
-            display_name = f"{os.path.basename(original_path)} [{severity}]"
-            listbox.insert(tk.END, display_name)
-            file_mapping[display_name] = (quarantine_name, original_path)
+            # Populate listbox
+            for display_name in sorted(files_dict.keys()):
+                listbox.insert(tk.END, display_name)
+                all_files[display_name] = files_dict[display_name]
+
+            return listbox
+
+        # Create sections
+        if malware_files:
+            malware_listbox = create_category_section(container, "🛑 MALWARE", malware_files, "#ef4444")
+        else:
+            malware_listbox = None
+
+        if suspicious_files:
+            suspicious_listbox = create_category_section(container, "⚠️ SUSPICIOUS", suspicious_files, "#facc15")
+        else:
+            suspicious_listbox = None
 
         def recover_selected():
-            selections = [listbox.get(i) for i in listbox.curselection()]
+            selections = []
+            if malware_listbox:
+                selections.extend([malware_listbox.get(i) for i in malware_listbox.curselection()])
+            if suspicious_listbox:
+                selections.extend([suspicious_listbox.get(i) for i in suspicious_listbox.curselection()])
+
             if not selections:
                 messagebox.showwarning("No Selection", "Please select at least one file to recover.")
                 return
@@ -480,7 +514,7 @@ class RDefenderUI:
             error_messages = []
 
             for display_name in selections:
-                quarantine_name, original_path = file_mapping[display_name]
+                quarantine_name, original_path = all_files[display_name]
                 restore_path = original_path
                 
                 try:
@@ -492,18 +526,18 @@ class RDefenderUI:
                             break
                     
                     if not quarantine_path or not os.path.exists(quarantine_path):
-                        error_messages.append(f"{os.path.basename(original_path)}: Not found in quarantine")
+                        error_messages.append(f"{display_name}: Not found in quarantine")
                         failed_count += 1
                         continue
 
                     # If user chose "No", ask for custom location per file
                     if recovery_strategy is False:  # No - Choose new location
                         restore_path = filedialog.asksaveasfilename(
-                            initialfile=os.path.basename(original_path),
-                            title=f"Specify restore location for {os.path.basename(original_path)}"
+                            initialfile=display_name,
+                            title=f"Specify restore location for {display_name}"
                         )
                         if not restore_path:
-                            error_messages.append(f"Skipped: {os.path.basename(original_path)}")
+                            error_messages.append(f"Skipped: {display_name}")
                             failed_count += 1
                             continue
 
@@ -513,7 +547,7 @@ class RDefenderUI:
                         try:
                             os.makedirs(dest_dir, exist_ok=True)
                         except:
-                            error_messages.append(f"{os.path.basename(original_path)}: Cannot create destination folder")
+                            error_messages.append(f"{display_name}: Cannot create destination folder")
                             failed_count += 1
                             continue
 
@@ -529,17 +563,17 @@ class RDefenderUI:
                             save_whitelist(self.whitelist)
 
                     time_str = datetime.now().strftime("%H:%M:%S")
-                    self.root.after(0, lambda ts=time_str, name=os.path.basename(restore_path): self._insert_to_tree(ts, name, "RESTORED", "Un-Quarantined", "clean"))
+                    self.root.after(0, lambda ts=time_str, name=display_name: self._insert_to_tree(ts, name, "RESTORED", "Un-Quarantined", "clean"))
                     
                     recovered_count += 1
 
                 except Exception as e:
-                    error_messages.append(f"{os.path.basename(original_path)}: {str(e)}")
+                    error_messages.append(f"{display_name}: {str(e)}")
                     failed_count += 1
 
             # Update metadata file to remove recovered files
             try:
-                remaining_metadata = {k: v for k, v in metadata.items() if k not in [file_mapping[s][0] for s in selections if s in file_mapping]}
+                remaining_metadata = {k: v for k, v in metadata.items() if k not in [all_files[s][0] for s in selections if s in all_files]}
                 if remaining_metadata:
                     with open(metadata_file, 'w') as f:
                         json.dump(remaining_metadata, f, indent=2)
