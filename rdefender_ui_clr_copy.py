@@ -213,6 +213,8 @@ class RDefenderUI:
         start_btn.pack(side="left", padx=10)
         stop_btn = tk.Button(frame, text="STOP MONITORING", bg="#ef4444", fg="white", font=("Segoe UI", 11, "bold"), width=20, command=self.stop_monitoring)
         stop_btn.pack(side="left", padx=10)
+        scan_folder_btn = tk.Button(frame, text="SCAN FOLDER", bg="#8b5cf6", fg="white", font=("Segoe UI", 11, "bold"), width=20, command=self.scan_specific_folder)
+        scan_folder_btn.pack(side="left", padx=10)
         restore_btn = tk.Button(frame, text="RECOVER FILE", bg="#3b82f6", fg="white", font=("Segoe UI", 11, "bold"), width=20, command=self.restore_quarantined_file)
         restore_btn.pack(side="left", padx=10)
 
@@ -378,6 +380,105 @@ class RDefenderUI:
             messagebox.showinfo("Success", f"File safely restored to:\n{restore_path}\n\n✅ File added to whitelist - it will not be auto-scanned again.")
         except Exception as e:
             messagebox.showerror("Restore Error", f"Could not restore file:\n{str(e)}")
+
+    # ----------------FOLDER SCAN LOGIC ----------------
+    def scan_specific_folder(self):
+        """Opens a dialog to select a folder and starts scanning it in the background."""
+        folder_path = filedialog.askdirectory(title="Select Folder to Scan")
+        if not folder_path:
+            return
+        
+        # Start the folder scan in a background thread
+        t = threading.Thread(target=self._scan_folder_worker, args=(folder_path,), daemon=True)
+        t.start()
+
+    def _scan_folder_worker(self, folder_path):
+        """Background worker that recursively scans all supported files in a folder."""
+        scanned_count = 0
+        detected_count = 0
+        
+        try:
+            self.proc_label.config(text=f"Engine Status: FOLDER SCAN ACTIVE ({folder_path})", fg="#a855f7")
+            self.root.update()
+            
+            # Walk through all files in the folder recursively
+            for root_dir, _, files in os.walk(folder_path):
+                for file in files:
+                    if not file.lower().endswith(SUPPORTED_EXTENSIONS):
+                        continue
+                    
+                    filepath = os.path.join(root_dir, file)
+                    
+                    # Skip system folders
+                    lower_path = filepath.lower()
+                    if "$recycle.bin" in lower_path or "system volume information" in lower_path:
+                        continue
+                    
+                    try:
+                        # Skip if file is too large
+                        if os.path.getsize(filepath) > 10485760:
+                            continue
+                        
+                        # Check whitelist
+                        file_hash = compute_file_hash(filepath)
+                        if file_hash:
+                            with self.whitelist_lock:
+                                if file_hash in self.whitelist:
+                                    continue
+                        
+                        # Scan the file
+                        scanned_count += 1
+                        name = os.path.basename(filepath)
+                        
+                        # Thread Checks In
+                        with self.active_scans_lock:
+                            self.active_scans.add(f"[FOLDER] {name}")
+                        
+                        try:
+                            label, score = self.scanner.scan_file(filepath)
+                            
+                            score_pct = float(score) * 100
+                            result_str = f"{label} ({score_pct:.1f}%)"
+                            
+                            if label == "MALWARE":
+                                detected_count += 1
+                                tag = "malware"
+                                success = quarantine_file(filepath, label)
+                                action = "QUARANTINED" if success else "Q-FAILED (LOCKED)"
+                            elif label == "SUSPICIOUS":
+                                detected_count += 1
+                                action, tag = "Logged/Flagged", "suspicious"
+                                quarantine_file(filepath, label)
+                            else:
+                                action, tag = "Allowed", "clean"
+                            
+                            time_str = datetime.now().strftime("%H:%M:%S")
+                            self.root.after(0, lambda t=time_str, n=name, r=result_str, a=action, tg=tag: self._insert_to_tree(t, n, r, a, tg))
+                        
+                        finally:
+                            # Thread Checks Out
+                            with self.active_scans_lock:
+                                self.active_scans.discard(f"[FOLDER] {name}")
+                    
+                    except Exception:
+                        continue
+            
+            # Scan complete message
+            complete_msg = f"Folder Scan Complete: {scanned_count} files scanned, {detected_count} threats detected"
+            self.proc_label.config(text=f"Engine Status: {complete_msg}", fg="#22c55e")
+            self.root.after(3000, lambda: self._reset_engine_status())
+            messagebox.showinfo("Scan Complete", complete_msg)
+        
+        except Exception as e:
+            messagebox.showerror("Scan Error", f"Error scanning folder:\n{str(e)}")
+            self.proc_label.config(text="Engine Status: ACTIVE SCANNING", fg="#22c55e")
+
+    def _reset_engine_status(self):
+        """Reset engine status based on monitoring state."""
+        if self.monitoring:
+            self.proc_label.config(text="Engine Status: ACTIVE SCANNING", fg="#22c55e")
+        else:
+            self.proc_label.config(text="Engine Status: IDLE", fg="#facc15")
 
     def update_agent_metrics(self):
         try:
