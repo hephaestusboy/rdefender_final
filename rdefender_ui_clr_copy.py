@@ -209,14 +209,14 @@ class RDefenderUI:
     def create_controls(self):
         frame = tk.Frame(self.root, bg="#0f172a")
         frame.pack(pady=10)
-        start_btn = tk.Button(frame, text="START MONITORING", bg="#22c55e", fg="white", font=("Segoe UI", 11, "bold"), width=20, command=self.start_monitoring)
-        start_btn.pack(side="left", padx=10)
-        stop_btn = tk.Button(frame, text="STOP MONITORING", bg="#ef4444", fg="white", font=("Segoe UI", 11, "bold"), width=20, command=self.stop_monitoring)
-        stop_btn.pack(side="left", padx=10)
+        self.monitor_btn = tk.Button(frame, text="START MONITORING", bg="#22c55e", fg="white", font=("Segoe UI", 11, "bold"), width=20, command=self.toggle_monitoring)
+        self.monitor_btn.pack(side="left", padx=10)
         scan_folder_btn = tk.Button(frame, text="SCAN FOLDER", bg="#8b5cf6", fg="white", font=("Segoe UI", 11, "bold"), width=20, command=self.scan_specific_folder)
         scan_folder_btn.pack(side="left", padx=10)
-        restore_btn = tk.Button(frame, text="RECOVER FILE", bg="#3b82f6", fg="white", font=("Segoe UI", 11, "bold"), width=20, command=self.restore_quarantined_file)
+        restore_btn = tk.Button(frame, text="RECOVER FILES", bg="#3b82f6", fg="white", font=("Segoe UI", 11, "bold"), width=20, command=self.restore_quarantined_file)
         restore_btn.pack(side="left", padx=10)
+        whitelist_btn = tk.Button(frame, text="MANAGE WHITELIST", bg="#f59e0b", fg="white", font=("Segoe UI", 11, "bold"), width=20, command=self.manage_whitelist)
+        whitelist_btn.pack(side="left", padx=10)
 
     def create_alerts_table(self):
         frame = tk.LabelFrame(self.root, text="Detection Alerts", bg="#0f172a", fg="white", font=("Segoe UI", 12))
@@ -251,11 +251,24 @@ class RDefenderUI:
         self.active_scans_label = tk.Label(frame, text="Active Scans: None", bg="#0f172a", fg="#a855f7", font=("Segoe UI", 10, "italic"))
         self.active_scans_label.pack(anchor="w", padx=10, pady=(5, 0))
 
+        # Store button reference for dynamic updates
+        self.monitor_btn = None
+
     # ---------------- MONITORING LOGIC ----------------
+    def toggle_monitoring(self):
+        """Toggle monitoring on/off with single button."""
+        if not self.monitoring:
+            self.start_monitoring()
+        else:
+            self.stop_monitoring()
+
     def start_monitoring(self):
         if not self.monitoring:
             self.monitoring = True
             self.status_label.config(text="● STATUS: RUNNING", fg="#22c55e")
+            
+            # Update button to show STOP state
+            self.monitor_btn.config(text="STOP MONITORING", bg="#ef4444", command=self.toggle_monitoring)
 
             # 1. Take a silent snapshot of all existing files FIRST
             self.build_initial_baseline()
@@ -274,6 +287,10 @@ class RDefenderUI:
         self.monitoring = False
         self.status_label.config(text="● STATUS: STOPPED", fg="#ef4444")
         self.proc_label.config(text="Engine Status: IDLE", fg="#facc15")
+        
+        # Update button to show START state
+        self.monitor_btn.config(text="START MONITORING", bg="#22c55e", command=self.toggle_monitoring)
+        
         if self.observer:
             self.observer.stop()
             self.observer.join()
@@ -348,38 +365,322 @@ class RDefenderUI:
 
     def restore_quarantined_file(self):
         import stat
+        import json
         quarantine_root = "C:\\RDefender_Quarantine"
         if not os.path.exists(quarantine_root):
             messagebox.showinfo("Empty", "Quarantine vault is currently empty.")
             return
 
-        filepath = filedialog.askopenfilename(initialdir=quarantine_root, title="Select File to Restore", filetypes=(("Quarantined Files", "*.quarantine"), ("All Files", "*.*")))
-        if not filepath: return 
+        # Load metadata
+        metadata_file = os.path.join(quarantine_root, "metadata.json")
+        metadata = {}
+        if os.path.exists(metadata_file):
+            try:
+                with open(metadata_file, 'r') as f:
+                    metadata = json.load(f)
+            except:
+                pass
 
-        restore_dir = filedialog.askdirectory(initialdir=os.path.expanduser("~\\Downloads"), title="Select Destination Folder for Restored File")
-        if not restore_dir: return 
+        if not metadata:
+            messagebox.showinfo("Empty", "Quarantine vault is currently empty.")
+            return
 
-        try:
-            filename = os.path.basename(filepath)
-            parts = filename.split(".")
-            original_name = f"{parts[0]}.{parts[1]}"
-            restore_path = os.path.join(restore_dir, original_name)
+        # Create a custom dialog for multi-selection
+        select_window = tk.Toplevel(self.root)
+        select_window.title("Select Files to Recover")
+        select_window.geometry("700x450")
+        select_window.configure(bg="#0f172a")
+        
+        title_label = tk.Label(select_window, text="Select files to recover", font=("Segoe UI", 12, "bold"), bg="#0f172a", fg="white")
+        title_label.pack(pady=10)
 
-            os.chmod(filepath, stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)
-            shutil.move(filepath, restore_path)
+        info_label = tk.Label(select_window, text="Use Shift+Click to select range or Ctrl+Click for multiple files:", 
+                             font=("Segoe UI", 9), bg="#0f172a", fg="#cbd5e1")
+        info_label.pack(pady=5)
+
+        # Create listbox with scrollbar
+        frame = tk.Frame(select_window, bg="#0f172a")
+        frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=10)
+
+        scrollbar = tk.Scrollbar(frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        listbox = tk.Listbox(frame, selectmode=tk.MULTIPLE, yscrollcommand=scrollbar.set, 
+                            font=("Segoe UI", 9), bg="#1e293b", fg="white", 
+                            selectbackground="#3b82f6", activestyle="none")
+        listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=listbox.yview)
+
+        # Store last selected index for Shift+Click range selection
+        last_selected_index = [None]
+
+        def on_listbox_click(event):
+            """Handle Shift+Click for range selection and Ctrl+Click for multi-select."""
+            index = listbox.nearest(event.y)
+            if index < 0:
+                return
+
+            if event.state & 0x1:  # Shift key is pressed
+                # Select range from last_selected to current
+                if last_selected_index[0] is not None:
+                    start = min(last_selected_index[0], index)
+                    end = max(last_selected_index[0], index)
+                    listbox.selection_clear(0, tk.END)
+                    for i in range(start, end + 1):
+                        listbox.selection_set(i)
+                else:
+                    listbox.selection_set(index)
+                last_selected_index[0] = index
+            elif event.state & 0x4:  # Ctrl key is pressed
+                # Toggle selection of clicked item
+                if listbox.selection_includes(index):
+                    listbox.selection_clear(index)
+                else:
+                    listbox.selection_set(index)
+                last_selected_index[0] = index
+            else:
+                # Regular click - select only this item
+                listbox.selection_clear(0, tk.END)
+                listbox.selection_set(index)
+                last_selected_index[0] = index
+
+        listbox.bind("<Button-1>", on_listbox_click)
+
+        # Add files to listbox
+        file_mapping = {}
+        for quarantine_name, info in metadata.items():
+            original_path = info.get("original_path", "Unknown")
+            severity = info.get("severity", "Unknown")
+            display_name = f"{os.path.basename(original_path)} [{severity}]"
+            listbox.insert(tk.END, display_name)
+            file_mapping[display_name] = (quarantine_name, original_path)
+
+        def recover_selected():
+            selections = [listbox.get(i) for i in listbox.curselection()]
+            if not selections:
+                messagebox.showwarning("No Selection", "Please select at least one file to recover.")
+                return
+
+            # Show ONE consolidated recovery options dialog for all files
+            recovery_strategy = messagebox.askyesnocancel(
+                "Recovery Options",
+                f"Recovering {len(selections)} file(s)\n\n"
+                "Yes = Restore all to original locations\n"
+                "No = Choose locations for each file\n"
+                "Cancel = Skip recovery"
+            )
+
+            if recovery_strategy is None:  # Cancel
+                return
             
-            # ✅ ADD TO WHITELIST: Compute hash of restored file and whitelist it
-            file_hash = compute_file_hash(restore_path)
-            if file_hash:
+            select_window.destroy()
+
+            recovered_count = 0
+            failed_count = 0
+            error_messages = []
+
+            for display_name in selections:
+                quarantine_name, original_path = file_mapping[display_name]
+                restore_path = original_path
+                
+                try:
+                    # Find the quarantined file
+                    quarantine_path = None
+                    for root, dirs, files in os.walk(quarantine_root):
+                        if quarantine_name in files:
+                            quarantine_path = os.path.join(root, quarantine_name)
+                            break
+                    
+                    if not quarantine_path or not os.path.exists(quarantine_path):
+                        error_messages.append(f"{os.path.basename(original_path)}: Not found in quarantine")
+                        failed_count += 1
+                        continue
+
+                    # If user chose "No", ask for custom location per file
+                    if recovery_strategy is False:  # No - Choose new location
+                        restore_path = filedialog.asksaveasfilename(
+                            initialfile=os.path.basename(original_path),
+                            title=f"Specify restore location for {os.path.basename(original_path)}"
+                        )
+                        if not restore_path:
+                            error_messages.append(f"Skipped: {os.path.basename(original_path)}")
+                            failed_count += 1
+                            continue
+
+                    # Create destination directory if needed
+                    dest_dir = os.path.dirname(restore_path)
+                    if dest_dir and not os.path.exists(dest_dir):
+                        try:
+                            os.makedirs(dest_dir, exist_ok=True)
+                        except:
+                            error_messages.append(f"{os.path.basename(original_path)}: Cannot create destination folder")
+                            failed_count += 1
+                            continue
+
+                    # Restore file
+                    os.chmod(quarantine_path, stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)
+                    shutil.move(quarantine_path, restore_path)
+                    
+                    # Add to whitelist
+                    file_hash = compute_file_hash(restore_path)
+                    if file_hash:
+                        with self.whitelist_lock:
+                            self.whitelist.add(file_hash)
+                            save_whitelist(self.whitelist)
+
+                    time_str = datetime.now().strftime("%H:%M:%S")
+                    self.root.after(0, lambda ts=time_str, name=os.path.basename(restore_path): self._insert_to_tree(ts, name, "RESTORED", "Un-Quarantined", "clean"))
+                    
+                    recovered_count += 1
+
+                except Exception as e:
+                    error_messages.append(f"{os.path.basename(original_path)}: {str(e)}")
+                    failed_count += 1
+
+            # Update metadata file to remove recovered files
+            try:
+                remaining_metadata = {k: v for k, v in metadata.items() if k not in [file_mapping[s][0] for s in selections if s in file_mapping]}
+                if remaining_metadata:
+                    with open(metadata_file, 'w') as f:
+                        json.dump(remaining_metadata, f, indent=2)
+                else:
+                    if os.path.exists(metadata_file):
+                        os.remove(metadata_file)
+            except:
+                pass
+
+            # Show summary
+            summary = f"✅ Recovered: {recovered_count}\n❌ Failed: {failed_count}"
+            if error_messages:
+                summary += f"\n\nDetails:\n" + "\n".join(error_messages[:5])
+                if len(error_messages) > 5:
+                    summary += f"\n... and {len(error_messages) - 5} more"
+
+            messagebox.showinfo("Recovery Complete", summary)
+
+        # Buttons
+        button_frame = tk.Frame(select_window, bg="#0f172a")
+        button_frame.pack(pady=15)
+
+        tk.Button(button_frame, text="Recover Selected", bg="#10b981", fg="white", command=recover_selected, font=("Segoe UI", 10, "bold"), width=20).pack(side=tk.LEFT, padx=5)
+        tk.Button(button_frame, text="Cancel", bg="#ef4444", fg="white", command=select_window.destroy, font=("Segoe UI", 10, "bold"), width=20).pack(side=tk.LEFT, padx=5)
+
+    def manage_whitelist(self):
+        """Manage whitelisted files - view and remove."""
+        if not self.whitelist:
+            messagebox.showinfo("Whitelist Empty", "No files are currently whitelisted.")
+            return
+
+        # Create management window
+        manage_window = tk.Toplevel(self.root)
+        manage_window.title("Manage Whitelist")
+        manage_window.geometry("700x500")
+        manage_window.configure(bg="#0f172a")
+
+        # Title
+        title_label = tk.Label(manage_window, text=f"Whitelisted Files ({len(self.whitelist)})", 
+                              font=("Segoe UI", 12, "bold"), bg="#0f172a", fg="white")
+        title_label.pack(pady=10)
+
+        # Info text
+        info_label = tk.Label(manage_window, 
+                             text="Use Shift+Click to select range or Ctrl+Click for multiple files:",
+                             font=("Segoe UI", 9), bg="#0f172a", fg="#cbd5e1")
+        info_label.pack(pady=5)
+
+        # Listbox with scrollbar
+        frame = tk.Frame(manage_window, bg="#0f172a")
+        frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=10)
+
+        scrollbar = tk.Scrollbar(frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        listbox = tk.Listbox(frame, selectmode=tk.MULTIPLE, yscrollcommand=scrollbar.set, 
+                            font=("Segoe UI", 9), bg="#1e293b", fg="white", 
+                            selectbackground="#3b82f6", activestyle="none")
+        listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=listbox.yview)
+
+        # Store last selected index for Shift+Click range selection
+        last_selected_index = [None]
+
+        def on_listbox_click(event):
+            """Handle Shift+Click for range selection and Ctrl+Click for multi-select."""
+            index = listbox.nearest(event.y)
+            if index < 0:
+                return
+
+            if event.state & 0x1:  # Shift key is pressed
+                # Select range from last_selected to current
+                if last_selected_index[0] is not None:
+                    start = min(last_selected_index[0], index)
+                    end = max(last_selected_index[0], index)
+                    listbox.selection_clear(0, tk.END)
+                    for i in range(start, end + 1):
+                        listbox.selection_set(i)
+                else:
+                    listbox.selection_set(index)
+                last_selected_index[0] = index
+            elif event.state & 0x4:  # Ctrl key is pressed
+                # Toggle selection of clicked item
+                if listbox.selection_includes(index):
+                    listbox.selection_clear(index)
+                else:
+                    listbox.selection_set(index)
+                last_selected_index[0] = index
+            else:
+                # Regular click - select only this item
+                listbox.selection_clear(0, tk.END)
+                listbox.selection_set(index)
+                last_selected_index[0] = index
+
+        listbox.bind("<Button-1>", on_listbox_click)
+
+        # Populate listbox with hashes
+        hash_list = sorted(list(self.whitelist))
+        for file_hash in hash_list:
+            listbox.insert(tk.END, file_hash)
+
+        def remove_selected():
+            selections = [listbox.get(i) for i in listbox.curselection()]
+            if not selections:
+                messagebox.showwarning("No Selection", "Please select at least one file to remove.")
+                return
+
+            if messagebox.askyesno("Confirm Removal", 
+                                  f"Remove {len(selections)} file(s) from whitelist?\n\n"
+                                  "They will be scanned again on next detection."):
                 with self.whitelist_lock:
-                    self.whitelist.add(file_hash)
+                    for file_hash in selections:
+                        self.whitelist.discard(file_hash)
                     save_whitelist(self.whitelist)
 
-            time_str = datetime.now().strftime("%H:%M:%S")
-            self.root.after(0, lambda: self._insert_to_tree(time_str, original_name, "RESTORED", "Un-Quarantined", "clean"))
-            messagebox.showinfo("Success", f"File safely restored to:\n{restore_path}\n\n✅ File added to whitelist - it will not be auto-scanned again.")
-        except Exception as e:
-            messagebox.showerror("Restore Error", f"Could not restore file:\n{str(e)}")
+                messagebox.showinfo("Success", f"✅ Removed {len(selections)} file(s) from whitelist")
+                manage_window.destroy()
+
+        def clear_all():
+            if messagebox.askyesno("Clear All Whitelist", 
+                                  "Remove ALL files from whitelist?\n\n"
+                                  "This action is irreversible."):
+                with self.whitelist_lock:
+                    self.whitelist.clear()
+                    save_whitelist(self.whitelist)
+
+                messagebox.showinfo("Success", "✅ Whitelist cleared")
+                manage_window.destroy()
+
+        # Button frame
+        button_frame = tk.Frame(manage_window, bg="#0f172a")
+        button_frame.pack(pady=15)
+
+        tk.Button(button_frame, text="Remove Selected", bg="#ef4444", fg="white", 
+                 command=remove_selected, font=("Segoe UI", 10, "bold"), width=18).pack(side=tk.LEFT, padx=5)
+        
+        tk.Button(button_frame, text="Clear All", bg="#dc2626", fg="white", 
+                 command=clear_all, font=("Segoe UI", 10, "bold"), width=18).pack(side=tk.LEFT, padx=5)
+        
+        tk.Button(button_frame, text="Close", bg="#64748b", fg="white", 
+                 command=manage_window.destroy, font=("Segoe UI", 10, "bold"), width=18).pack(side=tk.LEFT, padx=5)
 
     # ----------------FOLDER SCAN LOGIC ----------------
     def scan_specific_folder(self):

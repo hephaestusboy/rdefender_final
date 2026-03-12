@@ -5,6 +5,9 @@ import stat
 import shutil
 import warnings
 import logging
+import base64
+import json
+import hashlib
 from datetime import datetime
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -72,6 +75,38 @@ SILVER_INDICES = [FEATURE_SCHEMA.index(f) for f in SILVER_BULLETS]
 # QUARANTINE SYSTEM
 # ==========================================
 
+QUARANTINE_METADATA_FILE = os.path.join(QUARANTINE_ROOT, "metadata.json")
+
+def load_quarantine_metadata():
+    """Load metadata mapping from JSON file."""
+    if os.path.exists(QUARANTINE_METADATA_FILE):
+        try:
+            with open(QUARANTINE_METADATA_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_quarantine_metadata(metadata):
+    """Save metadata mapping to JSON file."""
+    os.makedirs(QUARANTINE_ROOT, exist_ok=True)
+    try:
+        with open(QUARANTINE_METADATA_FILE, 'w') as f:
+            json.dump(metadata, f, indent=2)
+    except:
+        pass
+
+def encode_original_path(filepath):
+    """Encode original filepath in base64 for storage in metadata."""
+    return base64.b64encode(filepath.encode()).decode()
+
+def decode_original_path(encoded):
+    """Decode original filepath from metadata."""
+    try:
+        return base64.b64decode(encoded.encode()).decode()
+    except:
+        return None
+
 def quarantine_file(filepath, label):
     """Safely moves files into designated folders based on severity."""
     max_retries = 8
@@ -83,10 +118,13 @@ def quarantine_file(filepath, label):
     try:
         # EXIST_OK=TRUE prevents crashes when multiple threads try to make the folder at once
         os.makedirs(target_dir, exist_ok=True)
+        os.makedirs(QUARANTINE_ROOT, exist_ok=True)
 
         filename = os.path.basename(filepath)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f") # Added microsecond for concurrent safety
-        safe_filename = f"{filename}.{timestamp}.quarantine"
+        
+        # Use short filename: original_name.timestamp.quarantine
+        safe_filename = f"{os.path.splitext(filename)[0]}.{timestamp}.quarantine"
         quarantine_path = os.path.join(target_dir, safe_filename)
 
         # --- THE RETRY LOOP ---
@@ -94,6 +132,16 @@ def quarantine_file(filepath, label):
             try:
                 shutil.move(filepath, quarantine_path)
                 print(f"\033[91m🛡️  ACTION: {filename} moved to {label} vault!\033[0m")
+                
+                # Store original path in metadata
+                metadata = load_quarantine_metadata()
+                metadata[safe_filename] = {
+                    "original_path": filepath,
+                    "timestamp": timestamp,
+                    "severity": label
+                }
+                save_quarantine_metadata(metadata)
+                
                 return quarantine_path
             except PermissionError:
                 print(f"\033[93m⚠️  File locked, retrying quarantine (Attempt {attempt+1}/{max_retries})...\033[0m")
@@ -119,12 +167,19 @@ class MLScannerEngine:
     """Loads models once into RAM and handles the math for live files."""
     def __init__(self):
         print("🧠 Loading R-Defender ML Engine into RAM...")
+        
+        # Handle PyInstaller bundle path
+        if getattr(sys, 'frozen', False):
+            base_path = sys._MEIPASS
+        else:
+            base_path = os.path.dirname(os.path.abspath(__file__))
+        
         self.models = {
-            "rf_behav": joblib.load("rf_behavior_model.joblib"),
-            "rf_art": joblib.load("rf_artifact_model.joblib"),
-            "xgb_behav": joblib.load("xgb_behavior_model.joblib"),
-            "xgb_art": joblib.load("xgb_artifact_model.joblib"),
-            "fusion": joblib.load("fusion_model.joblib"),
+            "rf_behav": joblib.load(os.path.join(base_path, "rf_behavior_model.joblib")),
+            "rf_art": joblib.load(os.path.join(base_path, "rf_artifact_model.joblib")),
+            "xgb_behav": joblib.load(os.path.join(base_path, "xgb_behavior_model.joblib")),
+            "xgb_art": joblib.load(os.path.join(base_path, "xgb_artifact_model.joblib")),
+            "fusion": joblib.load(os.path.join(base_path, "fusion_model.joblib")),
         }
         print("✅ Models loaded successfully.")
 
