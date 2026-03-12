@@ -1,0 +1,353 @@
+import os
+import warnings
+import logging
+
+# --- KILL JOBLIB SPAM DEAD ---
+os.environ["PYTHONWARNINGS"] = "ignore"
+os.environ["LOKY_MAX_CPU_COUNT"] = "1"
+os.environ["JOBLIB_MULTIPROCESSING"] = "0"
+warnings.filterwarnings("ignore")
+logging.getLogger('joblib').setLevel(logging.ERROR) 
+
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+from datetime import datetime
+import psutil
+import time
+import shutil
+
+# --- NEW CONCURRENCY IMPORTS ---
+import threading
+import queue
+
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+
+from rdefender_agent import MLScannerEngine, quarantine_file, SUPPORTED_EXTENSIONS, LOG_FILE, TARGET_WATCH_DIR
+
+# ---------------- FILE MONITOR HANDLER ----------------
+class FileHandler(FileSystemEventHandler):
+    def __init__(self, ui):
+        self.ui = ui
+
+    def on_created(self, event):
+        if not event.is_directory:
+            self.ui.evaluate_and_queue(event.src_path)
+
+    def on_modified(self, event):
+        if not event.is_directory:
+            self.ui.evaluate_and_queue(event.src_path)
+
+# ---------------- MAIN UI ----------------
+class RDefenderUI:
+
+    def __init__(self, root):
+        self.root = root
+        self.root.title("RDefender – Real-Time Protection")
+        self.root.geometry("1000x700")
+        self.root.configure(bg="#0f172a")
+
+        self.monitoring = False
+        self.observer = None
+        self.agent_process = psutil.Process(os.getpid())
+
+        # --- THE RAM QUEUE & FILE STATE DATABASE ---
+        self.file_queue = queue.Queue()
+        self.file_state_db = {} # Remembers every file and its last modified time
+        self.db_lock = threading.Lock() # Makes the database thread-safe
+        
+        # --- ACTIVE SCANS TRACKER ---
+        self.active_scans = set()
+        self.active_scans_lock = threading.Lock()
+
+        self.setup_styles()
+        self.create_header()
+        self.create_status_panel()
+        self.create_controls()
+        self.create_alerts_table()
+        self.create_metrics_panel()
+
+        self.scanner = MLScannerEngine()
+        self.proc_label.config(text="Engine Status: LOADED & READY", fg="#22c55e")
+
+        self.start_queue_workers()
+        self.update_agent_metrics()
+
+    # ---------------- QUEUE & SWEEPER WORKERS ----------------
+    def start_queue_workers(self):
+        """Spawns background agents to read the queue."""
+        workers = os.cpu_count() or 4
+        for _ in range(workers):
+            t = threading.Thread(target=self._process_queue_loop, daemon=True)
+            t.start()
+
+    def _process_queue_loop(self):
+        while True:
+            filepath = self.file_queue.get() 
+            try:
+                self.process_file(filepath)
+            except Exception as e:
+                pass
+            finally:
+                self.file_queue.task_done()
+
+    def start_sweeper(self):
+        """The Ultimate EDR Fallback: Sweeps the folder every 3 seconds to catch dropped OS events."""
+        t = threading.Thread(target=self._sweeper_loop, daemon=True)
+        t.start()
+
+    def _sweeper_loop(self):
+        while True:
+            if self.monitoring:
+                try:
+                    for root_dir, _, files in os.walk(TARGET_WATCH_DIR):
+                        for file in files:
+                            filepath = os.path.join(root_dir, file)
+                            self.evaluate_and_queue(filepath)
+                except Exception:
+                    pass
+            time.sleep(3) # Wait 3 seconds before sweeping again
+
+    def evaluate_and_queue(self, filepath):
+        """Checks if a file is new, intercepts it by renaming, and queues it."""
+        if not filepath.lower().endswith(SUPPORTED_EXTENSIONS):
+            return
+
+        # 1. THE SYSTEM BYPASS: Ignore protected Windows background folders
+        lower_path = filepath.lower()
+        if "$recycle.bin" in lower_path or "system volume information" in lower_path:
+            return
+
+        try:
+            # 2. THE SIZE LIMIT: Skip files larger than 25 MB (Prevents Entropy Hangs)
+            if os.path.getsize(filepath) > 10485760:
+                return 
+
+            current_mtime = os.path.getmtime(filepath)
+            
+            with self.db_lock:
+                last_mtime = self.file_state_db.get(filepath, 0)
+                if current_mtime == last_mtime:
+                    return 
+                self.file_state_db[filepath] = current_mtime
+                
+            # 🛡️ THE PRE-EMPTIVE LOCK (Extension Hijack)
+            locked_path = filepath + ".scanning"
+            os.rename(filepath, locked_path)
+            
+            # Put the locked file into the queue
+            self.file_queue.put(locked_path)
+
+        except OSError:
+            # File is actively writing or strictly locked by the OS Kernel
+            pass
+
+    # ---------------- UI ELEMENTS ----------------
+    def setup_styles(self):
+        style = ttk.Style()
+        style.theme_use("default")
+        style.configure("Treeview", background="#1e293b", foreground="white", rowheight=28, fieldbackground="#1e293b", font=("Segoe UI", 10))
+        style.configure("Treeview.Heading", background="#111827", foreground="white", font=("Segoe UI", 11, "bold"))
+
+    def create_header(self):
+        header = tk.Frame(self.root, bg="#111827", height=60)
+        header.pack(fill="x")
+        title = tk.Label(header, text="RDEFENDER – Real-Time Ransomware Detection", font=("Segoe UI", 18, "bold"), fg="white", bg="#111827")
+        title.pack(pady=10)
+
+    def create_status_panel(self):
+        frame = tk.Frame(self.root, bg="#0f172a")
+        frame.pack(fill="x", pady=10)
+        self.status_label = tk.Label(frame, text="● STATUS: STOPPED", fg="#ef4444", bg="#0f172a", font=("Segoe UI", 12, "bold"))
+        self.status_label.pack()
+
+    def create_controls(self):
+        frame = tk.Frame(self.root, bg="#0f172a")
+        frame.pack(pady=10)
+        start_btn = tk.Button(frame, text="START MONITORING", bg="#22c55e", fg="white", font=("Segoe UI", 11, "bold"), width=20, command=self.start_monitoring)
+        start_btn.pack(side="left", padx=10)
+        stop_btn = tk.Button(frame, text="STOP MONITORING", bg="#ef4444", fg="white", font=("Segoe UI", 11, "bold"), width=20, command=self.stop_monitoring)
+        stop_btn.pack(side="left", padx=10)
+        restore_btn = tk.Button(frame, text="RECOVER FILE", bg="#3b82f6", fg="white", font=("Segoe UI", 11, "bold"), width=20, command=self.restore_quarantined_file)
+        restore_btn.pack(side="left", padx=10)
+
+    def create_alerts_table(self):
+        frame = tk.LabelFrame(self.root, text="Detection Alerts", bg="#0f172a", fg="white", font=("Segoe UI", 12))
+        frame.pack(fill="both", expand=True, padx=20, pady=10)
+        columns = ("time", "file", "result", "action")
+        self.tree = ttk.Treeview(frame, columns=columns, show="headings")
+        self.tree.heading("time", text="Time")
+        self.tree.heading("file", text="File")
+        self.tree.heading("result", text="Detection")
+        self.tree.heading("action", text="Action")
+        self.tree.column("time", width=120)
+        self.tree.column("file", width=480)
+        self.tree.column("result", width=150)
+        self.tree.column("action", width=150)
+        self.tree.tag_configure('malware', foreground='#ef4444')     
+        self.tree.tag_configure('suspicious', foreground='#facc15')  
+        self.tree.tag_configure('clean', foreground='#22c55e')       
+        self.tree.tag_configure('error', foreground='#a855f7')       
+        self.tree.pack(fill="both", expand=True)
+
+    def create_metrics_panel(self):
+        frame = tk.LabelFrame(self.root, text="System Metrics (RDefender Agent)", bg="#0f172a", fg="white", font=("Segoe UI", 12))
+        frame.pack(fill="x", padx=20, pady=10)
+        self.cpu_label = tk.Label(frame, text="Agent CPU: Calculating...", bg="#0f172a", fg="#38bdf8", font=("Segoe UI", 11))
+        self.cpu_label.pack(anchor="w", padx=10)
+        self.mem_label = tk.Label(frame, text="Agent RAM: Calculating...", bg="#0f172a", fg="#38bdf8", font=("Segoe UI", 11))
+        self.mem_label.pack(anchor="w", padx=10)
+        self.proc_label = tk.Label(frame, text="Engine Status: LOADING...", bg="#0f172a", fg="#facc15", font=("Segoe UI", 11, "bold"))
+        self.proc_label.pack(anchor="w", padx=10)
+        
+        # --- NEW UI ELEMENT: Active Scans Display ---
+        self.active_scans_label = tk.Label(frame, text="Active Scans: None", bg="#0f172a", fg="#a855f7", font=("Segoe UI", 10, "italic"))
+        self.active_scans_label.pack(anchor="w", padx=10, pady=(5, 0))
+
+    # ---------------- MONITORING LOGIC ----------------
+    def start_monitoring(self):
+        if not self.monitoring:
+            self.monitoring = True
+            self.status_label.config(text="● STATUS: RUNNING", fg="#22c55e")
+
+            # 1. Take a silent snapshot of all existing files FIRST
+            self.build_initial_baseline()
+
+            # 2. Start the background Sweeper thread
+            self.start_sweeper()
+
+            # 3. Start Watchdog
+            path = TARGET_WATCH_DIR
+            event_handler = FileHandler(self)
+            self.observer = Observer()
+            self.observer.schedule(event_handler, path, recursive=True)
+            self.observer.start()
+
+    def stop_monitoring(self):
+        self.monitoring = False
+        self.status_label.config(text="● STATUS: STOPPED", fg="#ef4444")
+        self.proc_label.config(text="Engine Status: IDLE", fg="#facc15")
+        if self.observer:
+            self.observer.stop()
+            self.observer.join()
+            self.observer = None
+
+    def process_file(self, locked_path):
+        # Strip the ".scanning" extension to get the real name for our UI log
+        original_path = locked_path.replace(".scanning", "")
+        name = os.path.basename(original_path)
+
+        if LOG_FILE.lower() in name.lower(): return
+
+        # Thread Checks In: Add file to active scans list
+        with self.active_scans_lock:
+            self.active_scans.add(name)
+
+        try:
+            # Scan the locked file safely away from Windows Explorer's eyes
+            label, score = self.scanner.scan_file(locked_path)
+
+            if label == "ERROR":
+                result_str, action, tag = "SCAN FAILED", "Ignored", "error"
+                # Failsafe: Put the original name back if the scan crashed
+                try: os.rename(locked_path, original_path) 
+                except: pass
+            else:
+                score_pct = float(score) * 100
+                result_str = f"{label} ({score_pct:.1f}%)"
+                
+                if label == "MALWARE":
+                    tag = "malware"
+                    success = quarantine_file(locked_path, label)
+                    action = "QUARANTINED" if success else "Q-FAILED (LOCKED)"
+                elif label == "SUSPICIOUS":
+                    action, tag = "Logged/Flagged", "suspicious"
+                    quarantine_file(locked_path, label)
+                else:
+                    action, tag = "Allowed", "clean"
+                    # ✅ IT IS CLEAN! Remove the lock and give it back to the user.
+                    try: os.rename(locked_path, original_path)
+                    except: pass
+
+            time_str = datetime.now().strftime("%H:%M:%S")
+            self.root.after(0, lambda: self._insert_to_tree(time_str, name, result_str, action, tag))
+            
+        finally:
+            # Thread Checks Out: Remove file from active scans list, even if it crashed
+            with self.active_scans_lock:
+                self.active_scans.discard(name)
+
+    def _insert_to_tree(self, time_str, name, result_str, action, tag):
+        item_id = self.tree.insert("", 0, values=(time_str, name, result_str, action)) 
+        self.tree.item(item_id, tags=(tag,))
+
+    def build_initial_baseline(self):
+        """Silently maps existing files on startup so we only scan new/modified ones."""
+        self.proc_label.config(text="Engine Status: BUILDING BASELINE...", fg="#facc15")
+        self.root.update() # Force UI to show the loading text
+
+        with self.db_lock:
+            for root_dir, _, files in os.walk(TARGET_WATCH_DIR):
+                for file in files:
+                    if file.lower().endswith(SUPPORTED_EXTENSIONS):
+                        filepath = os.path.join(root_dir, file)
+                        try:
+                            # Silently record the timestamp WITHOUT sending it to the queue
+                            self.file_state_db[filepath] = os.path.getmtime(filepath)
+                        except OSError:
+                            pass # Skip files locked by the OS
+
+        self.proc_label.config(text="Engine Status: ACTIVE SCANNING", fg="#22c55e")
+
+    def restore_quarantined_file(self):
+        import stat
+        quarantine_root = "C:\\RDefender_Quarantine"
+        if not os.path.exists(quarantine_root):
+            messagebox.showinfo("Empty", "Quarantine vault is currently empty.")
+            return
+
+        filepath = filedialog.askopenfilename(initialdir=quarantine_root, title="Select File to Restore", filetypes=(("Quarantined Files", "*.quarantine"), ("All Files", "*.*")))
+        if not filepath: return 
+
+        restore_dir = filedialog.askdirectory(initialdir=os.path.expanduser("~\\Downloads"), title="Select Destination Folder for Restored File")
+        if not restore_dir: return 
+
+        try:
+            filename = os.path.basename(filepath)
+            parts = filename.split(".")
+            original_name = f"{parts[0]}.{parts[1]}"
+            restore_path = os.path.join(restore_dir, original_name)
+
+            os.chmod(filepath, stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)
+            shutil.move(filepath, restore_path)
+
+            time_str = datetime.now().strftime("%H:%M:%S")
+            self.root.after(0, lambda: self._insert_to_tree(time_str, original_name, "RESTORED", "Un-Quarantined", "clean"))
+            messagebox.showinfo("Success", f"File safely restored to:\n{restore_path}")
+        except Exception as e:
+            messagebox.showerror("Restore Error", f"Could not restore file:\n{str(e)}")
+
+    def update_agent_metrics(self):
+        try:
+            cpu = self.agent_process.cpu_percent(interval=None)
+            mem = self.agent_process.memory_info().rss / (1024 * 1024)
+            self.cpu_label.config(text=f"Agent CPU: {cpu:.2f}%")
+            self.mem_label.config(text=f"Agent RAM: {mem:.2f} MB")
+            
+            # Read the active scans set and update the UI
+            with self.active_scans_lock:
+                if not self.active_scans:
+                    self.active_scans_label.config(text="Active Scans: None")
+                else:
+                    # Join up to 4 file names together
+                    scan_text = "Scanning: " + " | ".join(list(self.active_scans)[:4])
+                    self.active_scans_label.config(text=scan_text)
+                    
+        except Exception:
+            pass
+        self.root.after(1000, self.update_agent_metrics)
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = RDefenderUI(root)
+    root.mainloop()
