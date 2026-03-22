@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>RDefender</title>
+    <style>
+        /* --- APPLE GLASSMORPHISM CSS --- */
+        :root { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #ffffff; }
+        body {
+            margin: 0; padding: 20px;
+            background: radial-gradient(circle at 10% 10%, #3b0764 0%, #0f172a 40%), radial-gradient(circle at 90% 90%, #1e3a8a 0%, #0f172a 40%);
+            background-color: #0f172a; background-attachment: fixed;
+            height: 100vh; box-sizing: border-box; overflow: hidden;
+            display: flex; flex-direction: column; gap: 15px;
+        }
+        .glass {
+            background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+            border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 16px;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3); padding: 20px;
+        }
+        
+        /* --- MAIN COMPONENTS --- */
+        .header { display: flex; justify-content: space-between; align-items: center; padding: 15px 25px; }
+        .header h1 { margin: 0; font-size: 24px; font-weight: 700; background: linear-gradient(90deg, #60a5fa, #a855f7); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .header p { margin: 5px 0 0 0; color: #94a3b8; font-size: 13px; }
+        .status-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #ef4444; margin-right: 8px; box-shadow: 0 0 10px #ef4444; transition: 0.3s; }
+        .status-text { font-weight: 600; color: #ef4444; font-size: 14px; transition: 0.3s; }
+        
+        .controls { display: flex; gap: 15px; }
+        button { border: none; border-radius: 10px; padding: 12px 20px; font-weight: 600; font-size: 13px; color: white; cursor: pointer; transition: all 0.2s ease; box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
+        button:hover { transform: translateY(-2px); }
+        button:active { transform: translateY(1px); }
+        .btn-start { background: linear-gradient(135deg, #10b981, #059669); }
+        .btn-scan { background: linear-gradient(135deg, #8b5cf6, #6d28d9); }
+        .btn-recover { background: linear-gradient(135deg, #3b82f6, #1d4ed8); }
+        .btn-white { background: linear-gradient(135deg, #f59e0b, #b45309); }
+        .btn-close { background: rgba(255,255,255,0.1); }
+
+        .table-container { flex-grow: 1; overflow: hidden; display: flex; flex-direction: column; padding: 0; }
+        .table-header-bg { background: rgba(0,0,0,0.2); padding: 15px 20px; border-bottom: 1px solid rgba(255,255,255,0.05); }
+        .table-header-bg h3 { margin: 0; font-size: 15px; }
+        .table-wrapper { flex-grow: 1; overflow-y: auto; padding: 0 10px; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; text-align: left; }
+        th { padding: 12px 15px; color: #cbd5e1; font-weight: 600; position: sticky; top: 0; background: rgba(15, 23, 42, 0.9); backdrop-filter: blur(10px); z-index: 10;}
+        td { padding: 12px 15px; border-bottom: 1px solid rgba(255,255,255,0.05); }
+
+        .metrics { display: flex; justify-content: space-between; align-items: center; padding: 15px 25px; }
+        .metric-item { display: flex; flex-direction: column; }
+        .metric-label { font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; }
+        .metric-value { font-size: 15px; font-weight: 600; color: #38bdf8; margin-top: 3px; }
+        .scans-value { color: #a855f7; font-style: italic; }
+
+        .tag-malware { color: #ef4444; font-weight: bold; }
+        .tag-suspicious { color: #facc15; font-weight: bold; }
+        .tag-clean { color: #22c55e; }
+
+        /* --- MODAL (POPUP) CSS --- */
+        .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(5px); z-index: 1000; justify-content: center; align-items: center; }
+        .modal-content { width: 650px; max-height: 80vh; display: flex; flex-direction: column; }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 15px; }
+        .modal-header h2 { margin: 0; font-size: 18px; }
+        .modal-list { flex-grow: 1; overflow-y: auto; background: rgba(0,0,0,0.2); border-radius: 8px; padding: 10px; margin: 15px 0; border: 1px solid rgba(255,255,255,0.05); }
+        .modal-item { display: flex; align-items: center; gap: 10px; padding: 10px; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 13px; font-family: monospace; cursor: pointer;}
+        .modal-item:hover { background: rgba(255,255,255,0.05); }
+        .modal-item input[type="checkbox"] { accent-color: #3b82f6; width: 16px; height: 16px; cursor: pointer; }
+        .modal-actions { display: flex; justify-content: flex-end; gap: 10px; }
+        .select-all-label { font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 8px; font-weight: 600; color: #cbd5e1; }
+    </style>
+</head>
+<body>
+
+    <div class="glass header">
+        <div><h1>RDEFENDER</h1><p>Real-Time Ransomware Detection</p></div>
+        <div><span class="status-dot" id="statusDot"></span><span class="status-text" id="statusText">SYSTEM STOPPED</span></div>
+    </div>
+
+    <div class="glass controls">
+        <button class="btn-start" id="monitorBtn" onclick="toggleMonitoring()">START MONITORING</button>
+        <button class="btn-scan" onclick="pywebview.api.scan_folder()">SCAN FOLDER</button>
+        <button class="btn-recover" onclick="openRecoveryModal()">RECOVER FILES</button>
+        <button class="btn-white" onclick="openWhitelistModal()">WHITELIST</button>
+    </div>
+
+    <div class="glass table-container">
+        <div class="table-header-bg"><h3>Detection Alerts</h3></div>
+        <div class="table-wrapper">
+            <table>
+                <thead><tr><th style="width: 100px;">Time</th><th>File Processed</th><th style="width: 150px;">Detection</th><th style="width: 150px;">Action</th></tr></thead>
+                <tbody id="alertsBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="glass metrics">
+        <div class="metric-item"><span class="metric-label">Engine Status</span><span class="metric-value" id="engineStatus" style="color: #facc15;">LOADING...</span></div>
+        <div class="metric-item"><span class="metric-label">Active Scans</span><span class="metric-value scans-value" id="activeScans">None</span></div>
+        <div class="metric-item"><span class="metric-label">Agent CPU</span><span class="metric-value" id="cpuLabel">Calculating...</span></div>
+        <div class="metric-item"><span class="metric-label">Agent RAM</span><span class="metric-value" id="ramLabel">Calculating...</span></div>
+    </div>
+
+    <div id="recoveryModal" class="modal-overlay">
+        <div class="glass modal-content">
+            <div class="modal-header">
+                <h2>Quarantine Vault</h2>
+                <label class="select-all-label">
+                    <input type="checkbox" id="selectAllRecovery" onchange="toggleSelectAll('.recover-check', this.checked)"> Select All
+                </label>
+            </div>
+            <div class="modal-list" id="recoveryList">Loading...</div>
+            <div class="modal-actions">
+                <button class="btn-close" onclick="closeModal('recoveryModal')">Cancel</button>
+                <button class="btn-recover" onclick="executeRecovery()">Recover Selected</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="whitelistModal" class="modal-overlay">
+        <div class="glass modal-content">
+            <div class="modal-header">
+                <h2>Managed Whitelist</h2>
+                <label class="select-all-label">
+                    <input type="checkbox" id="selectAllWhitelist" onchange="toggleSelectAll('.whitelist-check', this.checked)"> Select All
+                </label>
+            </div>
+            <div class="modal-list" id="whitelistList">Loading...</div>
+            <div class="modal-actions">
+                <button class="btn-close" onclick="closeModal('whitelistModal')">Cancel</button>
+                <button style="background: #ef4444;" onclick="executeWhitelistRemoval()">Remove Selected</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let isMonitoring = false;
+
+        function toggleMonitoring() {
+            isMonitoring = !isMonitoring;
+            const btn = document.getElementById("monitorBtn");
+            const dot = document.getElementById("statusDot");
+            const txt = document.getElementById("statusText");
+
+            if(isMonitoring) {
+                btn.innerText = "STOP MONITORING"; btn.style.background = "linear-gradient(135deg, #ef4444, #b91c1c)";
+                dot.style.background = "#22c55e"; dot.style.boxShadow = "0 0 10px #22c55e";
+                txt.innerText = "SYSTEM RUNNING"; txt.style.color = "#22c55e";
+                pywebview.api.start_monitoring();
+            } else {
+                btn.innerText = "START MONITORING"; btn.style.background = "linear-gradient(135deg, #10b981, #059669)";
+                dot.style.background = "#ef4444"; dot.style.boxShadow = "0 0 10px #ef4444";
+                txt.innerText = "SYSTEM STOPPED"; txt.style.color = "#ef4444";
+                pywebview.api.stop_monitoring();
+            }
+        }
+
+        function updateMetrics(cpu, ram, status, statusColor, scans) {
+            document.getElementById("cpuLabel").innerText = cpu + "%";
+            document.getElementById("ramLabel").innerText = ram + " MB";
+            const engStatus = document.getElementById("engineStatus");
+            engStatus.innerText = status; engStatus.style.color = statusColor;
+            document.getElementById("activeScans").innerText = scans;
+        }
+
+        function addAlert(time, file, result, action, tagClass) {
+            const tbody = document.getElementById("alertsBody");
+            const tr = document.createElement("tr");
+            tr.innerHTML = `<td style="color: #94a3b8;">${time}</td><td style="font-family: monospace;">${file}</td><td class="tag-${tagClass}">${result}</td><td class="tag-${tagClass}">${action}</td>`;
+            tbody.insertBefore(tr, tbody.firstChild);
+        }
+
+        // --- MODAL LOGIC & MULTI-SELECT ---
+        function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+        
+        function toggleSelectAll(checkboxClass, isChecked) {
+            document.querySelectorAll(checkboxClass).forEach(cb => cb.checked = isChecked);
+        }
+
+        async function openRecoveryModal() {
+            document.getElementById('selectAllRecovery').checked = false; // Reset select all box
+            document.getElementById('recoveryModal').style.display = 'flex';
+            const listDiv = document.getElementById('recoveryList');
+            listDiv.innerHTML = "Fetching metadata...";
+            
+            const data = await pywebview.api.get_quarantine_data();
+            if (data.length === 0) { listDiv.innerHTML = "Quarantine vault is empty."; return; }
+
+            listDiv.innerHTML = "";
+            data.forEach(item => {
+                const color = item.severity === "MALWARE" ? "#ef4444" : "#facc15";
+                listDiv.innerHTML += `
+                    <label class="modal-item">
+                        <input type="checkbox" value="${item.id}" class="recover-check">
+                        <span style="color: ${color}; font-weight: bold;">[${item.severity}]</span>
+                        <span style="color: white;">${item.name}</span>
+                        <span style="color: #64748b; font-size: 11px;">(${item.path})</span>
+                    </label>
+                `;
+            });
+        }
+
+        async function executeRecovery() {
+            const checked = Array.from(document.querySelectorAll('.recover-check:checked')).map(cb => cb.value);
+            if (checked.length === 0) return;
+            document.getElementById('recoveryList').innerHTML = "Restoring files...";
+            await pywebview.api.execute_recovery(checked);
+            closeModal('recoveryModal');
+        }
+
+        async function openWhitelistModal() {
+            document.getElementById('selectAllWhitelist').checked = false; // Reset select all box
+            document.getElementById('whitelistModal').style.display = 'flex';
+            const listDiv = document.getElementById('whitelistList');
+            listDiv.innerHTML = "Fetching whitelist...";
+            
+            const data = await pywebview.api.get_whitelist_data();
+            if (data.length === 0) { listDiv.innerHTML = "Whitelist is empty."; return; }
+
+            listDiv.innerHTML = "";
+            data.forEach(item => {
+                listDiv.innerHTML += `
+                    <label class="modal-item">
+                        <input type="checkbox" value="${item.hash}" class="whitelist-check">
+                        <span style="color: #3b82f6; font-weight: bold; width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${item.name}</span>
+                        <span style="color: #94a3b8; font-size: 11px;">${item.hash}</span>
+                    </label>
+                `;
+            });
+        }
+
+        async function executeWhitelistRemoval() {
+            const checked = Array.from(document.querySelectorAll('.whitelist-check:checked')).map(cb => cb.value);
+            if (checked.length === 0) return;
+            document.getElementById('whitelistList').innerHTML = "Removing hashes...";
+            await pywebview.api.execute_whitelist_removal(checked);
+            closeModal('whitelistModal');
+        }
+    </script>
+</body>
+</html>
