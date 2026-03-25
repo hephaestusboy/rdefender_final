@@ -195,6 +195,8 @@ If you encounter issues:
 - Monitoring: <1% CPU at idle
 
 ## Version History
+- **v2.0.0** - Updated UI
+- Migrated from ktinker to HTML/CSS based UI.
 
 - **v1.0.0** - Initial release with ML-powered detection
 - Dual behavior/artifact analysis
