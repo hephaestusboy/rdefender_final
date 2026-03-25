@@ -30,9 +30,9 @@ def check_requirements():
     # Always need PyInstaller
     try:
         subprocess.run(['pyinstaller', '--version'], capture_output=True, check=True)
-        print("✅ PyInstaller is installed")
+        print("[OK] PyInstaller is installed")
     except (subprocess.CalledProcessError, FileNotFoundError):
-        print("❌ PyInstaller is NOT installed")
+        print("[FAILED] PyInstaller is NOT installed")
         print("Install with: pip install pyinstaller")
         return False
     
@@ -40,13 +40,13 @@ def check_requirements():
     if system == "Windows":
         try:
             subprocess.run(['makensis', '/version'], capture_output=True, check=True)
-            print("✅ NSIS is installed")
+            print("[OK] NSIS is installed")
         except (subprocess.CalledProcessError, FileNotFoundError):
-            print("❌ NSIS is NOT installed")
+            print("[FAILED] NSIS is NOT installed")
             print("Download from: https://nsis.sourceforge.io/Download")
             return False
     else:
-        print(f"⚠️  NSIS not needed on {system} (only for final installer)")
+        print(f"[NOTE]  NSIS not needed on {system} (only for final installer)")
         print("   Build executable here, then create installer on Windows")
     
     return True
@@ -89,10 +89,10 @@ def build_executable():
     
     try:
         subprocess.run(cmd, check=True)
-        print("✅ Executable built successfully!")
+        print("[OK] Executable built successfully!")
         return True
     except subprocess.CalledProcessError as e:
-        print(f"❌ Build failed: {e}")
+        print(f"[FAILED] Build failed: {e}")
         return False
 
 def build_installer():
@@ -102,7 +102,7 @@ def build_installer():
     system = platform.system()
     
     if system != "Windows":
-        print(f"⚠️  NSIS installer cannot be built on {system}")
+        print(f"[NOTE]  NSIS installer cannot be built on {system}")
         print("\nTo create the Windows installer:")
         print("1. Copy the 'dist/RDefender' folder to Windows")
         print("2. Copy 'installer.nsi' to Windows")
@@ -112,18 +112,18 @@ def build_installer():
         return True  # Not a failure, just a limitation
     
     if not os.path.exists('dist/RDefender'):
-        print("❌ Build folder not found. Run PyInstaller first!")
+        print("[FAILED] Build folder not found. Run PyInstaller first!")
         return False
     
     cmd = ['makensis', 'installer.nsi']
     
     try:
         subprocess.run(cmd, check=True)
-        print("✅ Installer created successfully!")
-        print("\n📦 Output: RDefender-Setup.exe")
+        print("[OK] Installer created successfully!")
+        print("\n[OUTPUT] Output: RDefender-Setup.exe")
         return True
     except subprocess.CalledProcessError as e:
-        print(f"❌ Installer build failed: {e}")
+        print(f"[FAILED] Installer build failed: {e}")
         return False
 
 def create_portable_zip():
@@ -131,7 +131,7 @@ def create_portable_zip():
     print_header("Creating Portable ZIP Package")
     
     if not os.path.exists('dist/RDefender'):
-        print("❌ Build folder not found!")
+        print("[FAILED] Build folder not found!")
         return False
     
     try:
@@ -147,17 +147,17 @@ def create_portable_zip():
                     arcname = os.path.relpath(file_path, 'dist')
                     zipf.write(file_path, arcname)
         
-        print(f"✅ Portable package created: {zip_name}")
+        print(f"[OK] Portable package created: {zip_name}")
         return True
     except Exception as e:
-        print(f"❌ Failed to create ZIP: {e}")
+        print(f"[FAILED] Failed to create ZIP: {e}")
         return False
 
 def main():
     """Main build process."""
-    print("\n" + "🛡️  " * 15)
+    print("\n" + "[R-DEFENDER]  " * 15)
     print("      R-DEFENDER WINDOWS PACKAGE BUILD SYSTEM")
-    print("🛡️  " * 15 + "\n")
+    print("[R-DEFENDER]  " * 15 + "\n")
     
     system = platform.system()
     
@@ -177,13 +177,13 @@ def main():
         if not build_installer():
             return False
         print_header("Build Complete!")
-        print("✅ Your installer is ready: RDefender-Setup.exe")
+        print("[OK] Your installer is ready: RDefender-Setup.exe")
     else:
         # On Linux/macOS, create a portable ZIP
         print_header("Non-Windows System Detected")
         print("Created executable package at: dist/RDefender/")
         create_portable_zip()
-        print("\n📋 Next steps for Windows installer:")
+        print("\n[NEXT STEPS] Next steps for Windows installer:")
         print("1. Transfer 'dist/RDefender' folder to a Windows machine")
         print("2. Transfer 'installer.nsi' file to the same Windows machine")
         print("3. Install NSIS on Windows: https://nsis.sourceforge.io/Download")

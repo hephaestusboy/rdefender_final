@@ -12,6 +12,11 @@ from datetime import datetime
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
+# --- FIX WINDOWS EMOJI CRASH ---
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+
+
 # --- THE ABSOLUTE NUCLEAR OPTION FOR WARNINGS ---
 os.environ["PYTHONWARNINGS"] = "ignore"
 os.environ["LOKY_MAX_CPU_COUNT"] = "1"
@@ -61,7 +66,7 @@ TARGET_WATCH_DIR = "C:\\" # Change this to the folder you want to monitor
 
 MALWARE_THRESHOLD = 0.65       
 SUSPICIOUS_THRESHOLD = 0.30    
-SUPPORTED_EXTENSIONS = (".exe", ".sys", ".dll") 
+SUPPORTED_EXTENSIONS = (".exe", ".sys", ".dll",".bat") 
 
 SILVER_BULLETS = [
     "IS_SIGNATURE_VALID", 
@@ -131,7 +136,7 @@ def quarantine_file(filepath, label):
         for attempt in range(max_retries):
             try:
                 shutil.move(filepath, quarantine_path)
-                print(f"\033[91m🛡️  ACTION: {filename} moved to {label} vault!\033[0m")
+                print(f"\033[91m[QUARANTINED] ACTION: {filename} moved to {label} vault!\033[0m")
                 
                 # Store original path in metadata
                 metadata = load_quarantine_metadata()
@@ -144,11 +149,11 @@ def quarantine_file(filepath, label):
                 
                 return quarantine_path
             except PermissionError:
-                print(f"\033[93m⚠️  File locked, retrying quarantine (Attempt {attempt+1}/{max_retries})...\033[0m")
+                print(f"\033[93m[WARNING] File locked, retrying quarantine (Attempt {attempt+1}/{max_retries})...\033[0m")
                 time.sleep(retry_delay)
 
         # --- IF MOVE FAILS ---
-        print("\033[93m⚠️  Attempting active file permission lockdown...\033[0m")
+        print("\033[93m[WARNING] Attempting active file permission lockdown...\033[0m")
         try:
             os.chmod(filepath, stat.S_IREAD | stat.S_IWRITE)
             os.chmod(filepath, 0)
@@ -157,7 +162,7 @@ def quarantine_file(filepath, label):
              return None
 
     except Exception as e:
-        print(f"\033[95m❌ QUARANTINE ERROR: {str(e)}\033[0m")
+        print(f"\033[95m[ERROR] QUARANTINE ERROR: {str(e)}\033[0m")
         return None
 
 # ==========================================
@@ -166,7 +171,7 @@ def quarantine_file(filepath, label):
 class MLScannerEngine:
     """Loads models once into RAM and handles the math for live files."""
     def __init__(self):
-        print("🧠 Loading R-Defender ML Engine into RAM...")
+        print("[LOADING] Loading R-Defender ML Engine into RAM...")
         
         # Handle PyInstaller bundle path
         if getattr(sys, 'frozen', False):
@@ -181,7 +186,7 @@ class MLScannerEngine:
             "xgb_art": joblib.load(os.path.join(base_path, "xgb_artifact_model.joblib")),
             "fusion": joblib.load(os.path.join(base_path, "fusion_model.joblib")),
         }
-        print("✅ Models loaded successfully.")
+        print("[SUCCESS] Models loaded successfully.")
 
     def build_fusion_features(self, p_rf_b, p_rf_a, p_xgb_b, p_xgb_a, raw_vec):
         probs = np.array([p_rf_b, p_rf_a, p_xgb_b, p_xgb_a])

@@ -13,6 +13,7 @@ a = Analysis(
         ('xgb_behavior_model.joblib', '.'),
         ('xgb_artifact_model.joblib', '.'),
         ('fusion_model.joblib', '.'),
+        ('gui', 'gui'),
         (r'C:\Users\vboxuser\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\mscerts', 'mscerts'),
         (r'C:\Users\vboxuser\Desktop\rdefender_final\rdefender_final\venv\Lib\site-packages\xgboost', 'xgboost'),
     ],

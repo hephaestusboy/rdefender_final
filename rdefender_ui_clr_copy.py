@@ -60,62 +60,87 @@ def save_whitelist(whitelist_dict):
 class FileHandler(FileSystemEventHandler):
     def __init__(self, api): self.api = api
     def on_created(self, event):
-        if not event.is_directory: self.api.evaluate_and_queue(event.src_path)
+        if not event.is_directory: self.api._evaluate_and_queue(event.src_path)
     def on_modified(self, event):
-        if not event.is_directory: self.api.evaluate_and_queue(event.src_path)
+        if not event.is_directory: self.api._evaluate_and_queue(event.src_path)
 
 # ==========================================
 # THE BRIDGE API (Connects Python to HTML)
 # ==========================================
 class RDefenderAPI:
     def __init__(self):
-        self.window = None
-        self.monitoring = False
-        self.observer = None
-        self.agent_process = psutil.Process(os.getpid())
-        self.file_queue = queue.Queue()
-        self.file_state_db = {} 
-        self.db_lock = threading.Lock() 
-        self.active_scans = set()
-        self.active_scans_lock = threading.Lock()
+        # Using underscores hides these from PyWebView's JS converter, preventing the recursion crash!
+        self._window = None
+        self._monitoring = False
+        self._observer = None
+        self._agent_process = psutil.Process(os.getpid())
+        self._file_queue = queue.Queue()
+        self._file_state_db = {} 
+        self._db_lock = threading.Lock() 
+        self._active_scans = set()
+        self._active_scans_lock = threading.Lock()
         
-        self.whitelist = load_whitelist() # Now loads a dictionary
-        self.whitelist_lock = threading.Lock()
-        self.scanner = MLScannerEngine()
+        # --- NEW: Folder Scan Kill Switches ---
+        self._folder_scan_active = False
+        self._cancel_folder_scan = False
         
-        self.start_queue_workers()
-        threading.Thread(target=self.metrics_loop, daemon=True).start()
+        self._whitelist = load_whitelist() # Now loads a dictionary
+        self._whitelist_lock = threading.Lock()
+        self._scanner = MLScannerEngine()
+        
+        self._start_queue_workers()
+        threading.Thread(target=self._metrics_loop, daemon=True).start()
 
     def set_window(self, window):
-        self.window = window
+        self._window = window
         self._update_ui_status("LOADED & READY", "#22c55e")
 
-    # --- JAVASCRIPT CALLABLE METHODS ---
+    # --- PUBLIC JAVASCRIPT CALLABLE METHODS (NO UNDERSCORES) ---
     def start_monitoring(self):
-        if not self.monitoring:
-            self.monitoring = True
+        if not self._monitoring:
+            self._monitoring = True
             threading.Thread(target=self._build_initial_baseline, daemon=True).start()
             path = TARGET_WATCH_DIR
             event_handler = FileHandler(self)
-            self.observer = Observer()
-            self.observer.schedule(event_handler, path, recursive=True)
-            self.observer.start()
+            self._observer = Observer()
+            self._observer.schedule(event_handler, path, recursive=True)
+            self._observer.start()
             threading.Thread(target=self._sweeper_loop, daemon=True).start()
 
     def stop_monitoring(self):
-        self.monitoring = False
+        self._monitoring = False
         self._update_ui_status("IDLE", "#facc15")
-        if self.observer:
-            self.observer.stop()
-            self.observer.join()
-            self.observer = None
+        if self._observer:
+            self._observer.stop()
+            self._observer.join()
+            self._observer = None
 
     def scan_folder(self):
-        folder = self.window.create_file_dialog(webview.FOLDER_DIALOG)
+        if not self._window: return
+        
+        # 1. KILL SWITCH: Intercept active scan
+        if self._folder_scan_active:
+            self._cancel_folder_scan = True
+            return
+            
+        # 2. NORMAL START: Open dialog and scan
+        folder = self._window.create_file_dialog(webview.FileDialog.FOLDER)
         if folder and len(folder) > 0:
+            self._folder_scan_active = True
+            self._cancel_folder_scan = False
+            
+            # Morph the UI button into a red CANCEL button
+            self._window.evaluate_js("""
+                var btn = document.getElementById('scanFolderBtn');
+                if (btn) {
+                    btn.innerText = 'CANCEL SCAN';
+                    btn.style.background = 'linear-gradient(135deg, #ef4444, #b91c1c)';
+                }
+            """)
+            
             threading.Thread(target=self._scan_folder_worker, args=(folder[0],), daemon=True).start()
 
-    # --- MODAL DATA EXCHANGES ---
+    # --- MODAL DATA EXCHANGES (NO UNDERSCORES) ---
     def get_quarantine_data(self):
         """Reads metadata.json and sends it to the HTML Modal."""
         if not os.path.exists(METADATA_FILE): return []
@@ -158,13 +183,14 @@ class RDefenderAPI:
                         # Auto-Whitelist the recovered file with its actual NAME
                         f_hash = compute_file_hash(original_path)
                         if f_hash:
-                            with self.whitelist_lock:
-                                self.whitelist[f_hash] = os.path.basename(original_path)
-                                save_whitelist(self.whitelist)
+                            with self._whitelist_lock:
+                                self._whitelist[f_hash] = os.path.basename(original_path)
+                                save_whitelist(self._whitelist)
                         
                         del meta[q_id]
                         time_str = datetime.now().strftime("%H:%M:%S")
-                        self.window.evaluate_js(f"addAlert('{time_str}', '{os.path.basename(original_path)}', 'RESTORED', 'Un-Quarantined', 'clean');")
+                        if self._window:
+                            self._window.evaluate_js(f"addAlert('{time_str}', '{os.path.basename(original_path)}', 'RESTORED', 'Un-Quarantined', 'clean');")
                     except Exception as e: print(f"Restore failed: {e}")
 
             with open(METADATA_FILE, 'w') as f: json.dump(meta, f, indent=2)
@@ -172,39 +198,40 @@ class RDefenderAPI:
 
     def get_whitelist_data(self):
         """Sends whitelist hashes AND names to HTML Modal."""
-        with self.whitelist_lock:
+        with self._whitelist_lock:
             # Send an array of objects to javascript
-            return [{"hash": k, "name": v} for k, v in self.whitelist.items()]
+            return [{"hash": k, "name": v} for k, v in self._whitelist.items()]
 
     def execute_whitelist_removal(self, selected_hashes):
         """Receives checked hashes from HTML and removes them from the dictionary."""
-        with self.whitelist_lock:
+        with self._whitelist_lock:
             for h in selected_hashes:
-                self.whitelist.pop(h, None) # Use pop to safely remove dictionary keys
-            save_whitelist(self.whitelist)
+                self._whitelist.pop(h, None) # Use pop to safely remove dictionary keys
+            save_whitelist(self._whitelist)
 
-    # --- CORE WORKERS (UNCHANGED) ---
-    def start_queue_workers(self):
+    # --- INTERNAL CORE WORKERS (HIDDEN WITH UNDERSCORES) ---
+    def _start_queue_workers(self):
         workers = os.cpu_count() or 4
         for _ in range(workers): threading.Thread(target=self._process_queue_loop, daemon=True).start()
 
     def _process_queue_loop(self):
         while True:
-            filepath = self.file_queue.get() 
-            try: self.process_file(filepath)
+            filepath = self._file_queue.get() 
+            try: self._process_file(filepath)
             except Exception: pass
-            finally: self.file_queue.task_done()
+            finally: self._file_queue.task_done()
 
     def _sweeper_loop(self):
         while True:
-            if self.monitoring:
+            if self._monitoring:
                 try:
                     for root_dir, _, files in os.walk(TARGET_WATCH_DIR):
-                        for file in files: self.evaluate_and_queue(os.path.join(root_dir, file))
+                        for file in files: self._evaluate_and_queue(os.path.join(root_dir, file))
                 except Exception: pass
             time.sleep(3) 
 
-    def evaluate_and_queue(self, filepath):
+    def _evaluate_and_queue(self, filepath):
+        if filepath.endswith(".scanning"): return
         if not filepath.lower().endswith(SUPPORTED_EXTENSIONS): return
         lower_path = filepath.lower()
         if "$recycle.bin" in lower_path or "system volume information" in lower_path: return
@@ -213,30 +240,30 @@ class RDefenderAPI:
             if os.path.getsize(filepath) > 10485760: return 
             file_hash = compute_file_hash(filepath)
             if file_hash:
-                with self.whitelist_lock:
-                    if file_hash in self.whitelist: return  # Checking 'in dict' perfectly matches keys
+                with self._whitelist_lock:
+                    if file_hash in self._whitelist: return  # Checking 'in dict' perfectly matches keys
 
             current_mtime = os.path.getmtime(filepath)
-            with self.db_lock:
-                last_mtime = self.file_state_db.get(filepath, 0)
+            with self._db_lock:
+                last_mtime = self._file_state_db.get(filepath, 0)
                 if current_mtime == last_mtime: return 
-                self.file_state_db[filepath] = current_mtime
+                self._file_state_db[filepath] = current_mtime
                 
             locked_path = filepath + ".scanning"
             os.rename(filepath, locked_path)
-            self.file_queue.put(locked_path)
+            self._file_queue.put(locked_path)
         except OSError: pass
 
-    def process_file(self, locked_path):
+    def _process_file(self, locked_path):
         original_path = locked_path.replace(".scanning", "")
         name = os.path.basename(original_path)
 
         if LOG_FILE.lower() in name.lower(): return
 
-        with self.active_scans_lock: self.active_scans.add(name)
+        with self._active_scans_lock: self._active_scans.add(name)
 
         try:
-            label, score = self.scanner.scan_file(locked_path)
+            label, score = self._scanner.scan_file(locked_path)
             if label == "ERROR":
                 result_str, action, tag = "SCAN FAILED", "Ignored", "error"
                 try: os.rename(locked_path, original_path) 
@@ -257,47 +284,120 @@ class RDefenderAPI:
                     except: pass
 
             time_str = datetime.now().strftime("%H:%M:%S")
-            if self.window:
+            if self._window:
                 js_code = f"addAlert('{time_str}', '{name}', '{result_str}', '{action}', '{tag}');"
-                self.window.evaluate_js(js_code)
+                self._window.evaluate_js(js_code)
         finally:
-            with self.active_scans_lock: self.active_scans.discard(name)
+            with self._active_scans_lock: self._active_scans.discard(name)
 
     def _build_initial_baseline(self):
         self._update_ui_status("BUILDING BASELINE...", "#facc15")
-        with self.db_lock:
+        with self._db_lock:
             for root_dir, _, files in os.walk(TARGET_WATCH_DIR):
                 for file in files:
                     if file.lower().endswith(SUPPORTED_EXTENSIONS):
                         filepath = os.path.join(root_dir, file)
-                        try: self.file_state_db[filepath] = os.path.getmtime(filepath)
+                        try: self._file_state_db[filepath] = os.path.getmtime(filepath)
                         except OSError: pass 
         self._update_ui_status("ACTIVE SCANNING", "#22c55e")
 
-    def metrics_loop(self):
+    def _metrics_loop(self):
         while True:
-            if self.window:
+            if self._window:
                 try:
-                    cpu = f"{self.agent_process.cpu_percent(interval=None):.2f}"
-                    mem = f"{self.agent_process.memory_info().rss / (1024 * 1024):.2f}"
-                    with self.active_scans_lock:
-                        scans = "None" if not self.active_scans else "Scanning: " + " | ".join(list(self.active_scans)[:4])
-                    self.window.evaluate_js(f"updateMetrics('{cpu}', '{mem}', document.getElementById('engineStatus').innerText, document.getElementById('engineStatus').style.color, '{scans}')")
+                    cpu = f"{self._agent_process.cpu_percent(interval=None):.2f}"
+                    mem = f"{self._agent_process.memory_info().rss / (1024 * 1024):.2f}"
+                    with self._active_scans_lock:
+                        scans = "None" if not self._active_scans else "Scanning: " + " | ".join(list(self._active_scans)[:4])
+                    self._window.evaluate_js(f"updateMetrics('{cpu}', '{mem}', document.getElementById('engineStatus').innerText, document.getElementById('engineStatus').style.color, '{scans}')")
                 except Exception: pass
             time.sleep(1)
 
     def _update_ui_status(self, text, color):
-        if self.window:
-            self.window.evaluate_js(f"document.getElementById('engineStatus').innerText = '{text}'; document.getElementById('engineStatus').style.color = '{color}';")
+        if self._window:
+            self._window.evaluate_js(f"document.getElementById('engineStatus').innerText = '{text}'; document.getElementById('engineStatus').style.color = '{color}';")
 
     def _scan_folder_worker(self, folder_path):
         self._update_ui_status(f"FOLDER SCAN ACTIVE ({folder_path})", "#a855f7")
+        detected_count = 0
+        
         for root_dir, _, files in os.walk(folder_path):
-            for file in files:
-                filepath = os.path.join(root_dir, file)
-                self.evaluate_and_queue(filepath)
-        while not self.file_queue.empty(): time.sleep(1)
-        self._update_ui_status("ACTIVE SCANNING" if self.monitoring else "IDLE", "#22c55e" if self.monitoring else "#facc15")
+            if self._cancel_folder_scan: break # [CANCELLED] Check if user clicked Cancel (Folder Level)
+        
+        for file in files:
+            if self._cancel_folder_scan: break # [CANCELLED] Check if user clicked Cancel (File Level)
+            if not file.lower().endswith(SUPPORTED_EXTENSIONS): continue
+                
+            filepath = os.path.join(root_dir, file)
+            lower_path = filepath.lower()
+            if "$recycle.bin" in lower_path or "system volume information" in lower_path: continue
+                
+            try:
+                    # Size guardrail
+                if os.path.getsize(filepath) > 10485760: continue
+                    
+                    # Whitelist check
+                f_hash = compute_file_hash(filepath)
+                if f_hash:
+                    with self._whitelist_lock:
+                        if f_hash in self._whitelist: continue
+                    
+                name = os.path.basename(filepath)
+                with self._active_scans_lock: self._active_scans.add(f"[FOLDER] {name}")
+                    
+                try:
+                        # SCAN DIRECTLY: Do not use the real-time queue or rename the file
+                    label, score = self._scanner.scan_file(filepath)
+                    if label == "ERROR": continue
+                        
+                    score_pct = float(score) * 100
+                    result_str = f"{label} ({score_pct:.1f}%)"
+                        
+                    if label == "MALWARE":
+                        detected_count += 1
+                        tag = "malware"
+                        success = quarantine_file(filepath, label)
+                        action = "QUARANTINED" if success else "Q-FAILED (LOCKED)"
+                    elif label == "SUSPICIOUS":
+                        detected_count += 1
+                        action, tag = "Logged/Flagged", "suspicious"
+                        quarantine_file(filepath, label)
+                    else:
+                        action, tag = "Allowed", "clean"
+                        
+                    time_str = datetime.now().strftime("%H:%M:%S")
+                    if self._window:
+                        self._window.evaluate_js(f"addAlert('{time_str}', '{name}', '{result_str}', '{action}', '{tag}');")
+                            
+                finally:
+                    with self._active_scans_lock: self._active_scans.discard(f"[FOLDER] {name}")
+            except Exception: pass
+
+        # --- CLEANUP STUCK .SCANNING FILES IN SCANNED FOLDER ---
+        try:
+            for root_dir, _, files in os.walk(folder_path):
+                for file in files:
+                    if file.endswith(".scanning"):
+                        stuck = os.path.join(root_dir, file)
+                        original = stuck.replace(".scanning", "")
+                        try: os.rename(stuck, original)
+                        except OSError: pass
+        except Exception: pass
+
+        # --- CLEANUP AND RESET UI ---
+        self._folder_scan_active = False
+        self._cancel_folder_scan = False
+        self._update_ui_status("ACTIVE SCANNING" if self._monitoring else "IDLE", "#22c55e" if self._monitoring else "#facc15")
+        
+        if self._window:
+            self._window.evaluate_js(f"""
+                var btn = document.getElementById('scanFolderBtn');
+                if (btn) {{
+                    btn.innerText = 'SCAN FOLDER';
+                    btn.style.background = 'linear-gradient(135deg, #8b5cf6, #6d28d9)';
+                }}
+                alert('Folder Scan Stopped/Finished!\\n\\nDetected Threats: {detected_count}');
+            """)
 
 
 # ==========================================
@@ -318,4 +418,4 @@ if __name__ == '__main__':
         background_color='#0f172a'
     )
     
-    webview.start(on_window_ready, (window, api), gui='qt')
+    webview.start(on_window_ready, (window, api))

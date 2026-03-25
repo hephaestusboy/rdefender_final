@@ -30,10 +30,10 @@ Section "Install"
     WriteUninstaller "$INSTDIR\Uninstall.exe"
     
     ; Create registry entries
-    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\RDefender" "DisplayName" "RDefender – Real-Time Ransomware Detection"
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\RDefender" "DisplayName" "RDefender"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\RDefender" "UninstallString" "$INSTDIR\Uninstall.exe"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\RDefender" "InstallLocation" "$INSTDIR"
-    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\RDefender" "DisplayVersion" "1.0"
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\RDefender" "DisplayVersion" "2.0.0"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\RDefender" "Publisher" "RDefender Team"
     
     ; Create start menu shortcuts
