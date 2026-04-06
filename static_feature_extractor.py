@@ -478,6 +478,5 @@ def extract_features_from_binary(filepath):
     # =============================
     features["ANOMALY_INDICATOR"] = int(features["FILE_ENTROPY"] > 7.5)
     features["EXCEPTION_TRIGGERED"] = int("exception" in joined)
-    pe.close()
 
     return dict(features)
