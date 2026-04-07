@@ -3,19 +3,35 @@
 
 block_cipher = None
 
+# Resolve site-packages path at spec-parse time so the spec is portable
+import sys, os
+_sp = next(p for p in sys.path if 'site-packages' in p and os.path.isdir(p))
+
 a = Analysis(
     ['rdefender_ui_clr_copy.py'],
     pathex=[],
-    binaries=[],
+    binaries=[
+        (os.path.join(_sp, 'xgboost', 'lib', 'libxgboost.so'), 'xgboost/lib'),
+        (os.path.join(_sp, 'catboost', '_catboost.so'), 'catboost'),
+    ],
     datas=[
-        ('rf_behavior_model.joblib', '.'),
-        ('rf_artifact_model.joblib', '.'),
-        ('xgb_behavior_model.joblib', '.'),
-        ('xgb_artifact_model.joblib', '.'),
-        ('fusion_model.joblib', '.'),
+        # v5 base models
+        ('rf_behavior_model_v5.joblib', '.'),
+        ('rf_artifact_model_v5.joblib', '.'),
+        ('xgb_behavior_model_v5.joblib', '.'),
+        ('xgb_artifact_model_v5.joblib', '.'),
+        ('lgbm_behavior_model_v5.joblib', '.'),
+        ('lgbm_artifact_model_v5.joblib', '.'),
+        ('catboost_behavior_model_v5.joblib', '.'),
+        ('catboost_artifact_model_v5.joblib', '.'),
+        ('fusion_model_v5.joblib', '.'),
+        ('thresholds_v5.json', '.'),
+        # GUI
         ('gui', 'gui'),
-        (r'C:\Users\vboxuser\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\mscerts', 'mscerts'),
-        (r'C:\Users\vboxuser\Desktop\rdefender_final\rdefender_final\venv\Lib\site-packages\xgboost', 'xgboost'),
+        # full package trees so runtime imports resolve
+        (os.path.join(_sp, 'xgboost'), 'xgboost'),
+        (os.path.join(_sp, 'lightgbm'), 'lightgbm'),
+        (os.path.join(_sp, 'catboost'), 'catboost'),
     ],
     hiddenimports=[
         'sklearn',
@@ -30,12 +46,15 @@ a = Analysis(
         'sklearn.exceptions',
         'xgboost',
         'xgboost.sklearn',
+        'lightgbm',
+        'lightgbm.sklearn',
+        'catboost',
+        'catboost.core',
         'joblib',
         'numpy',
         'scipy',
         'watchdog',
         'psutil',
-	'mscerts',
     ],
     hookspath=[],
     hooksconfig={},
