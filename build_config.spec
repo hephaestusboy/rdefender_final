@@ -4,16 +4,22 @@
 block_cipher = None
 
 # Resolve site-packages path at spec-parse time so the spec is portable
-import sys, os
+import sys, os, platform
 _sp = next(p for p in sys.path if 'site-packages' in p and os.path.isdir(p))
+_win = platform.system() == 'Windows'
+
+# Native binaries — Linux uses .so, Windows PyInstaller hooks handle DLLs automatically
+_binaries = []
+if not _win:
+    _xgb_so = os.path.join(_sp, 'xgboost', 'lib', 'libxgboost.so')
+    _cat_so  = os.path.join(_sp, 'catboost', '_catboost.so')
+    if os.path.exists(_xgb_so): _binaries.append((_xgb_so, 'xgboost/lib'))
+    if os.path.exists(_cat_so):  _binaries.append((_cat_so, 'catboost'))
 
 a = Analysis(
     ['rdefender_ui_clr_copy.py'],
     pathex=[],
-    binaries=[
-        (os.path.join(_sp, 'xgboost', 'lib', 'libxgboost.so'), 'xgboost/lib'),
-        (os.path.join(_sp, 'catboost', '_catboost.so'), 'catboost'),
-    ],
+    binaries=_binaries,
     datas=[
         # v5 base models
         ('rf_behavior_model_v5.joblib', '.'),
