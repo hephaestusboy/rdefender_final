@@ -207,3 +207,4 @@ If you encounter issues:
 ## Disclaimer
 
 R-Defender is a protective tool and should be used responsibly. It may occasionally flag legitimate files (false positives). The whitelist feature allows you to add trusted applications. Always maintain updated antivirus software alongside this tool.
+.
