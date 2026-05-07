@@ -14,12 +14,12 @@ if not _win:
     _xgb_so = os.path.join(_sp, 'xgboost', 'lib', 'libxgboost.so')
     if os.path.exists(_xgb_so): _binaries.append((_xgb_so, 'xgboost/lib'))
 
-# Find signify mscerts folder — required for IS_SIGNATURE_VALID at runtime
+# Bundle mscerts package — contains authroot.stl and cacert.pem required by signify at runtime
 try:
-    import signify
-    _signify_dir = os.path.dirname(signify.__file__)
+    import mscerts
+    _mscerts_dir = os.path.dirname(mscerts.__file__)
 except Exception:
-    _signify_dir = os.path.join(_sp, 'signify')
+    _mscerts_dir = os.path.join(_sp, 'mscerts')
 
 _datas = [
     # v6 models
@@ -33,8 +33,8 @@ _datas = [
     ('gui', 'gui'),
     # xgboost package tree so runtime imports resolve
     (os.path.join(_sp, 'xgboost'), 'xgboost'),
-    # signify full package (cert store + authenticode modules)
-    (_signify_dir, 'signify'),
+    # mscerts — authroot.stl + cacert.pem needed by signify.authenticode.trust_list
+    (_mscerts_dir, 'mscerts'),
 ]
 
 a = Analysis(
@@ -66,7 +66,10 @@ a = Analysis(
         'signify.authenticode.trust_list',
         'signify.pkcs7',
         'signify.x509',
+        'mscerts',
+        'mscerts.core',
         'certifi',
+        'asn1crypto',
     ],
     hookspath=[],
     hooksconfig={},
