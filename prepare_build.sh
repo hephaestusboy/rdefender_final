@@ -5,17 +5,15 @@
 set -e
 
 echo ""
-echo "🛡️  R-DEFENDER LINUX BUILD PREPARATION"
-echo "======================================"
+echo "🛡️  R-DEFENDER LINUX BUILD PREPARATION  (v6)"
+echo "============================================="
 echo ""
 
-# Colors
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Check requirements
 echo "Checking requirements..."
 if ! command -v python3 &> /dev/null; then
     echo "❌ Python 3 is required but not installed."
@@ -31,19 +29,14 @@ fi
 echo "✅ Python 3 and PyInstaller found"
 echo ""
 
-# Check for model files
 echo "Checking for model files..."
 MODELS=(
-    "rf_behavior_model_v5.joblib"
-    "rf_artifact_model_v5.joblib"
-    "xgb_behavior_model_v5.joblib"
-    "xgb_artifact_model_v5.joblib"
-    "lgbm_behavior_model_v5.joblib"
-    "lgbm_artifact_model_v5.joblib"
-    "catboost_behavior_model_v5.joblib"
-    "catboost_artifact_model_v5.joblib"
-    "fusion_model_v5.joblib"
-    "thresholds_v5.json"
+    "rf_behavior_model_v6.joblib"
+    "rf_artifact_model_v6.joblib"
+    "xgb_behavior_model_v6.joblib"
+    "xgb_artifact_model_v6.joblib"
+    "fusion_model_v6.joblib"
+    "thresholds_v6.json"
 )
 
 MISSING=0
@@ -64,7 +57,6 @@ fi
 
 echo ""
 
-# Check for required Python files
 echo "Checking Python files..."
 PYTHON_FILES=(
     "rdefender_ui_clr_copy.py"
@@ -109,15 +101,14 @@ for file in "${CONFIG_FILES[@]}"; do
 done
 
 echo ""
-echo "======================================"
+echo "============================================="
 echo -e "${GREEN}✅ All checks passed!${NC}"
-echo "======================================"
+echo "============================================="
 echo ""
 
-# Ask user what they want to do
 echo "What would you like to do?"
 echo ""
-echo "1. View preparation summary (recommended)"
+echo "1. View preparation summary"
 echo "2. Build executable (takes 5-10 minutes)"
 echo "3. Create transfer package for Windows"
 echo "4. Show deployment checklist"
@@ -129,24 +120,16 @@ case $choice in
         echo ""
         echo -e "${BLUE}📋 PREPARATION SUMMARY${NC}"
         echo ""
-        echo "✅ Your R-Defender project is ready for packaging!"
-        echo ""
-        echo "Next steps:"
-        echo "1. Read: PACKAGING_SUMMARY.md"
-        echo "2. Read: LINUX_BUILD_INFO.md"
-        echo "3. Transfer project to Windows machine"
-        echo "4. Follow: WINDOWS_BUILD.md"
+        echo "✅ R-Defender v6 project is ready for packaging!"
         echo ""
         echo "Files to transfer to Windows:"
-        echo "- rf/xgb/lgbm/catboost behavior+artifact _v5.joblib (8 files)"
-        echo "- fusion_model_v5.joblib"
-        echo "- thresholds_v5.json"
-        echo "- All .py Python files"
-        echo "- build_config.spec"
-        echo "- installer.nsi"
-        echo "- build.py"
-        echo "- build_requirements.txt"
-        echo "- requirements.txt"
+        echo "  Models (5):  rf/xgb behavior+artifact _v6.joblib + fusion_model_v6.joblib"
+        echo "  Config (1):  thresholds_v6.json"
+        echo "  Python (6):  rdefender_ui_clr_copy.py  rdefender_agent.py"
+        echo "               static_feature_extractor.py  feature_vectorizer.py"
+        echo "               model_feature_groups.py  feature_schema.py"
+        echo "  Build  (4):  build_config.spec  installer.nsi  build.py  build_requirements.txt"
+        echo "  Deps   (1):  requirements.txt"
         echo ""
         ;;
     2)
@@ -157,7 +140,6 @@ case $choice in
         pyinstaller build_config.spec --clean
         echo ""
         echo -e "${GREEN}✅ Build complete!${NC}"
-        echo ""
         echo "Output folder: dist/RDefender/"
         echo ""
         ;;
@@ -166,7 +148,6 @@ case $choice in
         echo -e "${BLUE}📦 Creating transfer package...${NC}"
         echo ""
         PACKAGE_NAME="RDefender-Windows-Build.tar.gz"
-        
         tar --exclude='.git' \
             --exclude='__pycache__' \
             --exclude='build' \
@@ -174,10 +155,8 @@ case $choice in
             --exclude='*.pyc' \
             --exclude='virtual' \
             -czf "$PACKAGE_NAME" .
-        
         SIZE=$(du -h "$PACKAGE_NAME" | cut -f1)
         echo -e "${GREEN}✅ Package created: $PACKAGE_NAME ($SIZE)${NC}"
-        echo ""
         echo "Transfer this file to Windows and extract it"
         echo ""
         ;;
@@ -185,30 +164,27 @@ case $choice in
         echo ""
         echo -e "${BLUE}📋 WINDOWS DEPLOYMENT CHECKLIST${NC}"
         echo ""
-        echo "Before going to Windows, verify:"
-        echo "☐ All 9 .joblib model files present (8 base + 1 fusion)"
-        echo "☐ thresholds_v5.json present"
-        echo "☐ All 6 Python files present"
-        echo "☐ build_config.spec present"
-        echo "☐ installer.nsi present"
-        echo "☐ build.py present"
-        echo "☐ requirements.txt present"
-        echo "☐ build_requirements.txt present"
+        echo "Model files (5 + 1 threshold):"
+        echo "  ☐ rf_behavior_model_v6.joblib"
+        echo "  ☐ rf_artifact_model_v6.joblib"
+        echo "  ☐ xgb_behavior_model_v6.joblib"
+        echo "  ☐ xgb_artifact_model_v6.joblib"
+        echo "  ☐ fusion_model_v6.joblib"
+        echo "  ☐ thresholds_v6.json"
         echo ""
-        echo "On Windows, verify:"
-        echo "☐ Python 3.8+ installed"
-        echo "☐ Python added to PATH"
-        echo "☐ NSIS installed"
-        echo "☐ All three tools verify (version commands work)"
+        echo "Python files:"
+        echo "  ☐ rdefender_ui_clr_copy.py  rdefender_agent.py"
+        echo "  ☐ static_feature_extractor.py  feature_vectorizer.py"
+        echo "  ☐ model_feature_groups.py  feature_schema.py"
         echo ""
-        echo "Build on Windows:"
-        echo "☐ pip install -r build_requirements.txt"
-        echo "☐ pip install -r requirements.txt"
-        echo "☐ python build.py"
+        echo "On Windows:"
+        echo "  ☐ Python 3.8+ installed and in PATH"
+        echo "  ☐ NSIS installed (https://nsis.sourceforge.io/Download)"
+        echo "  ☐ pip install -r build_requirements.txt"
+        echo "  ☐ pip install -r requirements.txt"
+        echo "  ☐ python build.py"
         echo ""
-        echo "Result:"
-        echo "☐ RDefender-Setup.exe created"
-        echo "☐ ~350 MB file ready to distribute"
+        echo "Result: RDefender-Setup.exe (~200 MB, no lgbm/catboost)"
         echo ""
         ;;
     *)
@@ -216,10 +192,3 @@ case $choice in
         exit 1
         ;;
 esac
-
-echo ""
-echo "For more information, see:"
-echo "- PACKAGING_SUMMARY.md"
-echo "- LINUX_BUILD_INFO.md"
-echo "- WINDOWS_BUILD.md"
-echo ""
