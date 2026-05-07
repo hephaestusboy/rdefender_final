@@ -222,8 +222,7 @@ class RDefenderAPI:
             finally: self._file_queue.task_done()
 
     def _sweeper_loop(self):
-        """Intentionally removed — walking C:\ every 3s blocks threads and is not needed.
-        Watchdog observer handles all real-time events."""
+        # Removed: walking C: every 3s blocked threads. Watchdog handles real-time events.
         pass
 
     def _evaluate_and_queue(self, filepath):
@@ -287,8 +286,7 @@ class RDefenderAPI:
             with self._active_scans_lock: self._active_scans.discard(name)
 
     def _build_initial_baseline(self):
-        """Intentionally removed — walking C:\ on startup blocks the UI thread.
-        Watchdog handles new/modified files from the moment monitoring starts."""
+        # Removed: walking C: on startup blocked the UI thread.
         pass
 
     def _metrics_loop(self):
