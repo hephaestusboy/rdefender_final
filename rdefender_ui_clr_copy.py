@@ -26,6 +26,7 @@ from watchdog.events import FileSystemEventHandler
 from rdefender_agent import MLScannerEngine, quarantine_file, SUPPORTED_EXTENSIONS, LOG_FILE, TARGET_WATCH_DIR
 
 WHITELIST_FILE = "rdefender_whitelist.json"
+VERSION_STRING = "v6 (Adaptive Feedback Search)"
 QUARANTINE_ROOT = "C:\\RDefender_Quarantine"
 METADATA_FILE = os.path.join(QUARANTINE_ROOT, "metadata.json")
 
@@ -86,6 +87,7 @@ class RDefenderAPI:
         
         self._whitelist = load_whitelist() # Now loads a dictionary
         self._whitelist_lock = threading.Lock()
+        print(f"[INIT] R-Defender {VERSION_STRING}")
         self._scanner = MLScannerEngine()
         
         self._start_queue_workers()
