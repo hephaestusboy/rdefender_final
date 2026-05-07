@@ -101,13 +101,11 @@ class RDefenderAPI:
     def start_monitoring(self):
         if not self._monitoring:
             self._monitoring = True
-            threading.Thread(target=self._build_initial_baseline, daemon=True).start()
-            path = TARGET_WATCH_DIR
+            self._update_ui_status("ACTIVE SCANNING", "#22c55e")
             event_handler = FileHandler(self)
             self._observer = Observer()
-            self._observer.schedule(event_handler, path, recursive=True)
+            self._observer.schedule(event_handler, TARGET_WATCH_DIR, recursive=True)
             self._observer.start()
-            threading.Thread(target=self._sweeper_loop, daemon=True).start()
 
     def stop_monitoring(self):
         self._monitoring = False
@@ -224,13 +222,9 @@ class RDefenderAPI:
             finally: self._file_queue.task_done()
 
     def _sweeper_loop(self):
-        while True:
-            if self._monitoring:
-                try:
-                    for root_dir, _, files in os.walk(TARGET_WATCH_DIR):
-                        for file in files: self._evaluate_and_queue(os.path.join(root_dir, file))
-                except Exception: pass
-            time.sleep(3) 
+        """Intentionally removed — walking C:\ every 3s blocks threads and is not needed.
+        Watchdog observer handles all real-time events."""
+        pass
 
     def _evaluate_and_queue(self, filepath):
         if filepath.endswith(".scanning"): return
@@ -293,15 +287,9 @@ class RDefenderAPI:
             with self._active_scans_lock: self._active_scans.discard(name)
 
     def _build_initial_baseline(self):
-        self._update_ui_status("BUILDING BASELINE...", "#facc15")
-        with self._db_lock:
-            for root_dir, _, files in os.walk(TARGET_WATCH_DIR):
-                for file in files:
-                    if file.lower().endswith(SUPPORTED_EXTENSIONS):
-                        filepath = os.path.join(root_dir, file)
-                        try: self._file_state_db[filepath] = os.path.getmtime(filepath)
-                        except OSError: pass 
-        self._update_ui_status("ACTIVE SCANNING", "#22c55e")
+        """Intentionally removed — walking C:\ on startup blocks the UI thread.
+        Watchdog handles new/modified files from the moment monitoring starts."""
+        pass
 
     def _metrics_loop(self):
         while True:
@@ -322,58 +310,53 @@ class RDefenderAPI:
     def _scan_folder_worker(self, folder_path):
         self._update_ui_status(f"FOLDER SCAN ACTIVE ({folder_path})", "#a855f7")
         detected_count = 0
-        
+
         for root_dir, _, files in os.walk(folder_path):
-            if self._cancel_folder_scan: break # [CANCELLED] Check if user clicked Cancel (Folder Level)
-        
-        for file in files:
-            if self._cancel_folder_scan: break # [CANCELLED] Check if user clicked Cancel (File Level)
-            if not file.lower().endswith(SUPPORTED_EXTENSIONS): continue
-                
-            filepath = os.path.join(root_dir, file)
-            lower_path = filepath.lower()
-            if "$recycle.bin" in lower_path or "system volume information" in lower_path: continue
-                
-            try:
-                    # Size guardrail
-                if os.path.getsize(filepath) > 10485760: continue
-                    
-                    # Whitelist check
-                f_hash = compute_file_hash(filepath)
-                if f_hash:
-                    with self._whitelist_lock:
-                        if f_hash in self._whitelist: continue
-                    
-                name = os.path.basename(filepath)
-                with self._active_scans_lock: self._active_scans.add(f"[FOLDER] {name}")
-                    
+            if self._cancel_folder_scan: break
+            for file in files:
+                if self._cancel_folder_scan: break
+                if not file.lower().endswith(SUPPORTED_EXTENSIONS): continue
+
+                filepath = os.path.join(root_dir, file)
+                lower_path = filepath.lower()
+                if "$recycle.bin" in lower_path or "system volume information" in lower_path: continue
+
                 try:
-                        # SCAN DIRECTLY: Do not use the real-time queue or rename the file
-                    label, score = self._scanner.scan_file(filepath)
-                    if label == "ERROR": continue
-                        
-                    score_pct = float(score) * 100
-                    result_str = f"{label} ({score_pct:.1f}%)"
-                        
-                    if label == "MALWARE":
-                        detected_count += 1
-                        tag = "malware"
-                        success = quarantine_file(filepath, label)
-                        action = "QUARANTINED" if success else "Q-FAILED (LOCKED)"
-                    elif label == "SUSPICIOUS":
-                        detected_count += 1
-                        action, tag = "Logged/Flagged", "suspicious"
-                        quarantine_file(filepath, label)
-                    else:
-                        action, tag = "Allowed", "clean"
-                        
-                    time_str = datetime.now().strftime("%H:%M:%S")
-                    if self._window:
-                        self._window.evaluate_js(f"addAlert('{time_str}', '{name}', '{result_str}', '{action}', '{tag}');")
-                            
-                finally:
-                    with self._active_scans_lock: self._active_scans.discard(f"[FOLDER] {name}")
-            except Exception: pass
+                    if os.path.getsize(filepath) > 10485760: continue
+
+                    f_hash = compute_file_hash(filepath)
+                    if f_hash:
+                        with self._whitelist_lock:
+                            if f_hash in self._whitelist: continue
+
+                    name = os.path.basename(filepath)
+                    with self._active_scans_lock: self._active_scans.add(f"[FOLDER] {name}")
+
+                    try:
+                        label, score = self._scanner.scan_file(filepath)
+                        if label == "ERROR": continue
+
+                        score_pct = float(score) * 100
+                        result_str = f"{label} ({score_pct:.1f}%)"
+
+                        if label == "MALWARE":
+                            detected_count += 1
+                            tag = "malware"
+                            success = quarantine_file(filepath, label)
+                            action = "QUARANTINED" if success else "Q-FAILED (LOCKED)"
+                        elif label == "SUSPICIOUS":
+                            detected_count += 1
+                            action, tag = "Logged/Flagged", "suspicious"
+                            quarantine_file(filepath, label)
+                        else:
+                            action, tag = "Allowed", "clean"
+
+                        time_str = datetime.now().strftime("%H:%M:%S")
+                        if self._window:
+                            self._window.evaluate_js(f"addAlert('{time_str}', '{name}', '{result_str}', '{action}', '{tag}');")
+                    finally:
+                        with self._active_scans_lock: self._active_scans.discard(f"[FOLDER] {name}")
+                except Exception: pass
 
         # --- CLEANUP STUCK .SCANNING FILES IN SCANNED FOLDER ---
         try:
