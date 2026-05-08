@@ -14,23 +14,34 @@ if not _win:
     _xgb_so = os.path.join(_sp, 'xgboost', 'lib', 'libxgboost.so')
     if os.path.exists(_xgb_so): _binaries.append((_xgb_so, 'xgboost/lib'))
 
+# Find signify mscerts folder — required for IS_SIGNATURE_VALID at runtime
+try:
+    import signify
+    _signify_dir = os.path.dirname(signify.__file__)
+except Exception:
+    _signify_dir = os.path.join(_sp, 'signify')
+
+_datas = [
+    # v6 models
+    ('rf_behavior_model_v6.joblib', '.'),
+    ('rf_artifact_model_v6.joblib', '.'),
+    ('xgb_behavior_model_v6.joblib', '.'),
+    ('xgb_artifact_model_v6.joblib', '.'),
+    ('fusion_model_v6.joblib', '.'),
+    ('thresholds_v6.json', '.'),
+    # GUI
+    ('gui', 'gui'),
+    # xgboost package tree so runtime imports resolve
+    (os.path.join(_sp, 'xgboost'), 'xgboost'),
+    # signify full package (cert store + authenticode modules)
+    (_signify_dir, 'signify'),
+]
+
 a = Analysis(
     ['rdefender_ui_clr_copy.py'],
     pathex=[],
     binaries=_binaries,
-    datas=[
-        # v6 models
-        ('rf_behavior_model_v6.joblib', '.'),
-        ('rf_artifact_model_v6.joblib', '.'),
-        ('xgb_behavior_model_v6.joblib', '.'),
-        ('xgb_artifact_model_v6.joblib', '.'),
-        ('fusion_model_v6.joblib', '.'),
-        ('thresholds_v6.json', '.'),
-        # GUI
-        ('gui', 'gui'),
-        # xgboost package tree so runtime imports resolve
-        (os.path.join(_sp, 'xgboost'), 'xgboost'),
-    ],
+    datas=_datas,
     hiddenimports=[
         'sklearn',
         'sklearn.ensemble',
@@ -49,6 +60,13 @@ a = Analysis(
         'scipy',
         'watchdog',
         'psutil',
+        'signify',
+        'signify.authenticode',
+        'signify.authenticode.cert_store',
+        'signify.authenticode.trust_list',
+        'signify.pkcs7',
+        'signify.x509',
+        'certifi',
     ],
     hookspath=[],
     hooksconfig={},
