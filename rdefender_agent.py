@@ -12,7 +12,6 @@ from datetime import datetime
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-# --- FIX WINDOWS EMOJI CRASH ---
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 
@@ -44,16 +43,16 @@ from feature_schema import FEATURE_SCHEMA
 # ==========================================
 # CONFIGURATION
 # ==========================================
-LOG_FILE             = "rdefender_events.log"
-QUARANTINE_ROOT      = "C:\\RDefender_Quarantine"
-QUARANTINE_MALWARE   = os.path.join(QUARANTINE_ROOT, "Malware")
+LOG_FILE              = "rdefender_events.log"
+QUARANTINE_ROOT       = "C:\\RDefender_Quarantine"
+QUARANTINE_MALWARE    = os.path.join(QUARANTINE_ROOT, "Malware")
 QUARANTINE_SUSPICIOUS = os.path.join(QUARANTINE_ROOT, "Suspicious")
-TARGET_WATCH_DIR     = "C:\\"
+TARGET_WATCH_DIR      = "C:\\"
 
-THRESHOLD_FILE       = "thresholds_v5.json"
-MALWARE_THRESHOLD    = 0.60
-SUSPICIOUS_THRESHOLD = 0.45
-SUPPORTED_EXTENSIONS = (".exe", ".sys", ".dll", ".bat")
+THRESHOLD_FILE        = "thresholds_v6.json"
+MALWARE_THRESHOLD     = 0.55
+SUSPICIOUS_THRESHOLD  = 0.40
+SUPPORTED_EXTENSIONS  = (".exe", ".sys", ".dll", ".bat")
 
 SILVER_BULLETS = [
     "IS_SIGNATURE_VALID",
@@ -105,9 +104,9 @@ def quarantine_file(filepath, label):
         os.makedirs(target_dir, exist_ok=True)
         os.makedirs(QUARANTINE_ROOT, exist_ok=True)
 
-        filename  = os.path.basename(filepath)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        safe_filename  = f"{os.path.splitext(filename)[0]}.{timestamp}.quarantine"
+        filename        = os.path.basename(filepath)
+        timestamp       = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        safe_filename   = f"{os.path.splitext(filename)[0]}.{timestamp}.quarantine"
         quarantine_path = os.path.join(target_dir, safe_filename)
 
         for attempt in range(max_retries):
@@ -139,13 +138,14 @@ def quarantine_file(filepath, label):
         return None
 
 # ==========================================
-# MACHINE LEARNING ENGINE
+# MACHINE LEARNING ENGINE  — v6 (4-model fusion)
 # ==========================================
 class MLScannerEngine:
-    """Loads all 9 v5 models once into RAM and handles inference for live files."""
+    """Loads the 5 v6 models (RF+XGB behavior/artifact + fusion) and runs
+    the 25-feature meta array identical to evaluate_ensemble_v6.py."""
 
     def __init__(self):
-        print("[LOADING] Loading R-Defender ML Engine v5 (8-model fusion) into RAM...")
+        print("[LOADING] Loading R-Defender ML Engine v6 (4-model fusion) into RAM...")
 
         if getattr(sys, 'frozen', False):
             base_path = sys._MEIPASS
@@ -153,45 +153,40 @@ class MLScannerEngine:
             base_path = os.path.dirname(os.path.abspath(__file__))
 
         self.models = {
-            "rf_b":   joblib.load(os.path.join(base_path, "rf_behavior_model_v5.joblib")),
-            "rf_a":   joblib.load(os.path.join(base_path, "rf_artifact_model_v5.joblib")),
-            "xgb_b":  joblib.load(os.path.join(base_path, "xgb_behavior_model_v5.joblib")),
-            "xgb_a":  joblib.load(os.path.join(base_path, "xgb_artifact_model_v5.joblib")),
-            "lgbm_b": joblib.load(os.path.join(base_path, "lgbm_behavior_model_v5.joblib")),
-            "lgbm_a": joblib.load(os.path.join(base_path, "lgbm_artifact_model_v5.joblib")),
-            "cat_b":  joblib.load(os.path.join(base_path, "catboost_behavior_model_v5.joblib")),
-            "cat_a":  joblib.load(os.path.join(base_path, "catboost_artifact_model_v5.joblib")),
-            "fusion": joblib.load(os.path.join(base_path, "fusion_model_v5.joblib")),
+            "rf_b":   joblib.load(os.path.join(base_path, "rf_behavior_model_v6.joblib")),
+            "rf_a":   joblib.load(os.path.join(base_path, "rf_artifact_model_v6.joblib")),
+            "xgb_b":  joblib.load(os.path.join(base_path, "xgb_behavior_model_v6.joblib")),
+            "xgb_a":  joblib.load(os.path.join(base_path, "xgb_artifact_model_v6.joblib")),
+            "fusion": joblib.load(os.path.join(base_path, "fusion_model_v6.joblib")),
         }
 
         self.mal_thresh, self.susp_thresh = _load_thresholds(base_path)
         print(f"[SUCCESS] Models loaded. Thresholds: MALWARE≥{self.mal_thresh}  SUSPICIOUS≥{self.susp_thresh}")
 
     # ------------------------------------------------------------------
-    # 32-feature meta array — must exactly match train_ensemble_v5.py
+    # 25-feature fusion array — must exactly match evaluate_ensemble_v6.py
     #
-    #  1-8  : p_rb, p_ra, p_xb, p_xa, p_lb, p_la, p_cb, p_ca
-    #  9-10 : avg_behavior, avg_artifact
-    #  11   : disagreement
-    #  12   : prob_entropy
-    #  13-14: high_artifact_stealth, high_behavior_stealth
-    #  15   : joint_conf
-    #  16-19: per-algo behavior-artifact deltas (rf, xgb, lgbm, cat)
-    #  20-21: max_sig, min_sig
-    #  22-25: silver bullets
-    #  26   : extreme_artifact_loose
-    #  27   : extreme_behavior_loose
-    #  28   : consensus_soft
-    #  29   : behavior_dominance
-    #  30   : signed x avg_prob
-    #  31   : entropy x avg_prob
-    #  32   : std across all 8 probs
+    #  1-4  : p_rf_b, p_rf_a, p_xgb_b, p_xgb_a
+    #  5-6  : avg_behavior, avg_artifact
+    #  7-8  : disagreement, prob_entropy
+    #  9-10 : high_artifact_stealth, high_behavior_stealth
+    #  11   : joint_conf
+    #  12-13: (p_rf_a - p_rf_b), (p_xgb_a - p_xgb_b)
+    #  14-15: max_sig, min_sig
+    #  16-19: silver bullets (IS_SIGNATURE_VALID, SHADOW_COPY_DELETION_STRINGS,
+    #                         VIRTUAL_RAW_SIZE_ANOMALY, FILE_ENTROPY)
+    #  20   : extreme_artifact_loose
+    #  21   : extreme_behavior_loose
+    #  22   : consensus_soft
+    #  23   : behavior_dominance
+    #  24   : signed x avg_prob
+    #  25   : entropy x avg_prob
     # ------------------------------------------------------------------
-    def build_fusion_features(self, p_rb, p_ra, p_xb, p_xa, p_lb, p_la, p_cb, p_ca, raw_vec):
-        probs = np.array([p_rb, p_ra, p_xb, p_xa, p_lb, p_la, p_cb, p_ca])
+    def _build_fusion_features(self, p_rf_b, p_rf_a, p_xgb_b, p_xgb_a, raw_vec):
+        probs = np.array([p_rf_b, p_rf_a, p_xgb_b, p_xgb_a])
 
-        avg_behavior = (p_rb + p_xb + p_lb + p_cb) / 4
-        avg_artifact = (p_ra + p_xa + p_la + p_ca) / 4
+        avg_behavior = (p_rf_b + p_xgb_b) / 2
+        avg_artifact = (p_rf_a + p_xgb_a) / 2
         disagreement = abs(avg_behavior - avg_artifact)
         prob_entropy = -(probs * np.log(probs + 1e-9) + (1 - probs) * np.log(1 - probs + 1e-9)).mean()
 
@@ -207,21 +202,19 @@ class MLScannerEngine:
         avg_prob       = (avg_behavior + avg_artifact) / 2
         signed_x_prob  = float(raw_silver[0]) * avg_prob
         entropy_x_prob = (float(raw_silver[3]) / 8.0) * avg_prob
-        prob_std       = float(probs.std())
 
         return np.array([[
-            p_rb, p_ra, p_xb, p_xa, p_lb, p_la, p_cb, p_ca,
+            p_rf_b, p_rf_a, p_xgb_b, p_xgb_a,
             avg_behavior, avg_artifact,
             disagreement, prob_entropy,
             high_artifact_stealth, high_behavior_stealth,
             joint_conf,
-            (p_ra - p_rb), (p_xa - p_xb), (p_la - p_lb), (p_ca - p_cb),
+            (p_rf_a - p_rf_b), (p_xgb_a - p_xgb_b),
             float(probs.max()), float(probs.min()),
             raw_silver[0], raw_silver[1], raw_silver[2], raw_silver[3],
             extreme_artifact_loose, extreme_behavior_loose,
             consensus_soft, behavior_dominance,
             signed_x_prob, entropy_x_prob,
-            prob_std,
         ]])
 
     def scan_file(self, filepath):
@@ -245,35 +238,28 @@ class MLScannerEngine:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
                     with joblib.parallel_backend('threading', n_jobs=1):
-                        p_rb = self.models["rf_b"].predict_proba(vec1)[0][1]
-                        p_ra = self.models["rf_a"].predict_proba(vec2)[0][1]
-                        p_xb = self.models["xgb_b"].predict_proba(vec1)[0][1]
-                        p_xa = self.models["xgb_a"].predict_proba(vec2)[0][1]
-                        p_lb = self.models["lgbm_b"].predict_proba(vec1)[0][1]
-                        p_la = self.models["lgbm_a"].predict_proba(vec2)[0][1]
-                        p_cb = self.models["cat_b"].predict_proba(vec1)[0][1]
-                        p_ca = self.models["cat_a"].predict_proba(vec2)[0][1]
+                        p_rf_b  = self.models["rf_b"].predict_proba(vec1)[0][1]
+                        p_rf_a  = self.models["rf_a"].predict_proba(vec2)[0][1]
+                        p_xgb_b = self.models["xgb_b"].predict_proba(vec1)[0][1]
+                        p_xgb_a = self.models["xgb_a"].predict_proba(vec2)[0][1]
 
-                        fusion_in  = self.build_fusion_features(
-                            p_rb, p_ra, p_xb, p_xa, p_lb, p_la, p_cb, p_ca, raw_vec
+                        fusion_in  = self._build_fusion_features(
+                            p_rf_b, p_rf_a, p_xgb_b, p_xgb_a, raw_vec
                         )
                         final_prob = self.models["fusion"].predict_proba(fusion_in)[0][1]
 
-                avg_behavior = (p_rb + p_xb + p_lb + p_cb) / 4
-                avg_artifact = (p_ra + p_xa + p_la + p_ca) / 4
+                avg_behavior = (p_rf_b + p_xgb_b) / 2
+                avg_artifact = (p_rf_a + p_xgb_a) / 2
 
                 if final_prob >= self.mal_thresh:
                     label = "MALWARE"
                 else:
-                    extreme_artifact    = (avg_artifact > 0.75) and (avg_behavior < 0.30) and raw_signed == 0
+                    extreme_artifact    = (p_xgb_a > 0.75) and (avg_behavior < 0.30) and raw_signed == 0
                     extreme_behavior    = (avg_behavior > 0.75) and (avg_artifact < 0.30) and raw_signed == 0
-                    # consensus: ≥6 of 8 base models agree
-                    consensus_suspicion = sum([
-                        p_rb > 0.30, p_ra > 0.30, p_xb > 0.30, p_xa > 0.30,
-                        p_lb > 0.30, p_la > 0.30, p_cb > 0.30, p_ca > 0.30
-                    ]) >= 6
+                    consensus_suspicion = (p_rf_b > 0.30 and p_rf_a > 0.30
+                                          and p_xgb_b > 0.30 and p_xgb_a > 0.30)
                     # shadow_del requires meaningful behavior signal to avoid low-signal FPs
-                    shadow_override = raw_shadow == 1 and avg_behavior > 0.15
+                    shadow_override     = raw_shadow == 1 and avg_behavior > 0.15
 
                     if shadow_override or extreme_artifact or extreme_behavior or consensus_suspicion:
                         label      = "MALWARE"
@@ -283,7 +269,7 @@ class MLScannerEngine:
                     else:
                         label = "CLEAN"
 
-                # signed file FP suppression
+                # signed-file FP suppression
                 if label == "MALWARE" and raw_signed == 1 and final_prob < 0.98:
                     label = "SUSPICIOUS"
 

@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec file for R-Defender
+# PyInstaller spec file for R-Defender v6
 
 block_cipher = None
 
@@ -12,32 +12,24 @@ _win = platform.system() == 'Windows'
 _binaries = []
 if not _win:
     _xgb_so = os.path.join(_sp, 'xgboost', 'lib', 'libxgboost.so')
-    _cat_so  = os.path.join(_sp, 'catboost', '_catboost.so')
     if os.path.exists(_xgb_so): _binaries.append((_xgb_so, 'xgboost/lib'))
-    if os.path.exists(_cat_so):  _binaries.append((_cat_so, 'catboost'))
 
 a = Analysis(
     ['rdefender_ui_clr_copy.py'],
     pathex=[],
     binaries=_binaries,
     datas=[
-        # v5 base models
-        ('rf_behavior_model_v5.joblib', '.'),
-        ('rf_artifact_model_v5.joblib', '.'),
-        ('xgb_behavior_model_v5.joblib', '.'),
-        ('xgb_artifact_model_v5.joblib', '.'),
-        ('lgbm_behavior_model_v5.joblib', '.'),
-        ('lgbm_artifact_model_v5.joblib', '.'),
-        ('catboost_behavior_model_v5.joblib', '.'),
-        ('catboost_artifact_model_v5.joblib', '.'),
-        ('fusion_model_v5.joblib', '.'),
-        ('thresholds_v5.json', '.'),
+        # v6 models
+        ('rf_behavior_model_v6.joblib', '.'),
+        ('rf_artifact_model_v6.joblib', '.'),
+        ('xgb_behavior_model_v6.joblib', '.'),
+        ('xgb_artifact_model_v6.joblib', '.'),
+        ('fusion_model_v6.joblib', '.'),
+        ('thresholds_v6.json', '.'),
         # GUI
         ('gui', 'gui'),
-        # full package trees so runtime imports resolve
+        # xgboost package tree so runtime imports resolve
         (os.path.join(_sp, 'xgboost'), 'xgboost'),
-        (os.path.join(_sp, 'lightgbm'), 'lightgbm'),
-        (os.path.join(_sp, 'catboost'), 'catboost'),
     ],
     hiddenimports=[
         'sklearn',
@@ -52,10 +44,6 @@ a = Analysis(
         'sklearn.exceptions',
         'xgboost',
         'xgboost.sklearn',
-        'lightgbm',
-        'lightgbm.sklearn',
-        'catboost',
-        'catboost.core',
         'joblib',
         'numpy',
         'scipy',
@@ -105,6 +93,4 @@ coll = COLLECT(
     upx_exclude=[],
     name='RDefender',
 )
-
-#edited
 
