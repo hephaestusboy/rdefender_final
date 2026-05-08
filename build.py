@@ -71,7 +71,7 @@ def build_executable():
     print_header("Building Executable with PyInstaller")
     
     # Use venv Python if it exists, otherwise use system Python
-    venv_python = os.path.join(os.getcwd(), 'venv', 'Scripts', 'python.exe')
+    venv_python = os.path.join(os.getcwd(), '.venv', 'Scripts', 'python.exe')
     if os.path.exists(venv_python):
         python_exe = venv_python
         print(f"Using venv Python: {python_exe}")
