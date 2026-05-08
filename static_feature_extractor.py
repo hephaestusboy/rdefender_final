@@ -236,7 +236,8 @@ def extract_strings(filepath, min_len=5):
 
 def safe_pe_load(filepath):
     try:
-        return pefile.PE(filepath, fast_load=True)
+        pe = pefile.PE(filepath, fast_load=True)
+        return pe
     except Exception:
         return None
 
@@ -323,131 +324,127 @@ def extract_features_from_binary(filepath):
     # =============================
     # PE ANALYSIS
     # =============================
-    # =============================
-    # PE ANALYSIS
-    # =============================
     if pe:
-        imports = extract_imports(pe)
-        imports_lower = [i.lower() for i in imports]
-        features["NUM_IMPORTS"] = len(imports)
-
-        # ---------- API GROUPS ----------
-        for fname, apis in API_GROUPS.items():
-            features[fname] = int(any(
-                api.lower() in imp
-                for api in apis
-                for imp in imports_lower
-            ))
-
-        # SAFELY GET SECTIONS FIRST
         try:
-            sections = pe.sections
-        except AttributeError:
-            sections = []
+            imports = extract_imports(pe)
+            imports_lower = [i.lower() for i in imports]
+            features["NUM_IMPORTS"] = len(imports)
 
-        # =============================
-        # NEW: SUBSYSTEM & OVERLAY FEATURES
-        # =============================
-        try:
-            subsystem = pe.OPTIONAL_HEADER.Subsystem
-            features["IS_GUI_APP"] = int(subsystem == 2)
-            features["IS_CONSOLE_APP"] = int(subsystem == 3)
-        except Exception:
-            features["IS_GUI_APP"] = 0
-            features["IS_CONSOLE_APP"] = 0
+            # ---------- API GROUPS ----------
+            for fname, apis in API_GROUPS.items():
+                features[fname] = int(any(
+                    api.lower() in imp
+                    for api in apis
+                    for imp in imports_lower
+                ))
 
-        try:
-            overlay_offset = pe.get_overlay_data_start_offset()
-            features["HAS_OVERLAY"] = int(overlay_offset is not None)
-        except Exception:
-            features["HAS_OVERLAY"] = 0
-
-        # =============================
-        # ADVANCED ENTROPY & PACKER FEATURES
-        # =============================
-        features["VIRTUAL_RAW_SIZE_ANOMALY"] = 0
-        
-        if sections:
-            # 1. Check for Virtual vs Raw Size Anomaly
-            for s in sections:
-                virt_size = s.Misc_VirtualSize
-                raw_size = s.SizeOfRawData
-                if raw_size > 0 and (virt_size / raw_size) > 5.0:
-                    features["VIRTUAL_RAW_SIZE_ANOMALY"] = 1
-                    break
-
-            # 2. Entropy Calculations
-            entropies = [s.get_entropy() for s in sections]
-
-            features["AVG_SECTION_ENTROPY"] = sum(entropies) / len(entropies)
-            features["MAX_SECTION_ENTROPY"] = max(entropies)
-            features["MIN_SECTION_ENTROPY"] = min(entropies)
-
-            mean = features["AVG_SECTION_ENTROPY"]
-            features["SECTION_ENTROPY_STD"] = math.sqrt(
-                sum((e - mean) ** 2 for e in entropies) / len(entropies)
-            )
-
-            features["NUM_HIGH_ENTROPY_SECTIONS"] = sum(e > 7.2 for e in entropies)
-            features["HAS_HIGH_ENTROPY_SECTION"] = int(features["NUM_HIGH_ENTROPY_SECTIONS"] > 0)
-
-            text_entropy = 0
-            rsrc_entropy = 0
-
-            for s in sections:
-                name = s.Name.decode(errors="ignore").lower()
-                if ".text" in name:
-                    text_entropy = s.get_entropy()
-                if ".rsrc" in name:
-                    rsrc_entropy = s.get_entropy()
-
-            features["TEXT_SECTION_ENTROPY"] = text_entropy
-            features["RSRC_SECTION_ENTROPY"] = rsrc_entropy
-
-        # =============================
-        # PACKING / STRUCTURAL FEATURES
-        # =============================
-        features["LOW_IMPORT_COUNT"] = int(features["NUM_IMPORTS"] < 20)
-        features["SMALL_IMPORT_TABLE"] = int(features["NUM_IMPORTS"] < 10)
-        
-        # Safe fallback if sections exist
-        if sections:
-            features["HIGH_ENTROPY_PACKING"] = int(features["MAX_SECTION_ENTROPY"] > 7.5)
-            features["FEW_SECTIONS"] = int(len(sections) <= 3)
-
-            # Large resource section
-            rsrc_size = 0
-            for s in sections:
-                if ".rsrc" in s.Name.decode(errors="ignore").lower():
-                    rsrc_size = s.SizeOfRawData
-            features["LARGE_RESOURCE_SECTION"] = int(rsrc_size > 500000)
-
-            # Entry point anomaly
+            # SAFELY GET SECTIONS FIRST
             try:
-                entry = pe.OPTIONAL_HEADER.AddressOfEntryPoint
-                text_section = next(
-                    (s for s in sections if ".text" in s.Name.decode(errors="ignore").lower()),
-                    None
-                )
-                if text_section:
-                    start = text_section.VirtualAddress
-                    end = start + text_section.Misc_VirtualSize
-                    features["ENTRYPOINT_OUTSIDE_TEXT"] = int(not(start <= entry <= end))
-            except:
-                features["ENTRYPOINT_OUTSIDE_TEXT"] = 0
+                sections = pe.sections
+            except AttributeError:
+                sections = []
 
-            # Suspicious section names
-            suspicious = ["upx", "packed", "aspack", "mpress"]
-            features["UNUSUAL_SECTION_NAMES"] = int(
-                any(any(x in s.Name.decode(errors="ignore").lower() for x in suspicious)
-                    for s in sections)
-            )
-        else:
-            features["HIGH_ENTROPY_PACKING"] = 0
-            features["FEW_SECTIONS"] = 0
-            features["LARGE_RESOURCE_SECTION"] = 0
-            features["ENTRYPOINT_OUTSIDE_TEXT"] = 0
-            features["UNUSUAL_SECTION_NAMES"] = 0
+            # =============================
+            # NEW: SUBSYSTEM & OVERLAY FEATURES
+            # =============================
+            try:
+                subsystem = pe.OPTIONAL_HEADER.Subsystem
+                features["IS_GUI_APP"] = int(subsystem == 2)
+                features["IS_CONSOLE_APP"] = int(subsystem == 3)
+            except Exception:
+                features["IS_GUI_APP"] = 0
+                features["IS_CONSOLE_APP"] = 0
+
+            try:
+                overlay_offset = pe.get_overlay_data_start_offset()
+                features["HAS_OVERLAY"] = int(overlay_offset is not None)
+            except Exception:
+                features["HAS_OVERLAY"] = 0
+
+            # =============================
+            # ADVANCED ENTROPY & PACKER FEATURES
+            # =============================
+            features["VIRTUAL_RAW_SIZE_ANOMALY"] = 0
+            
+            if sections:
+                # 1. Check for Virtual vs Raw Size Anomaly
+                for s in sections:
+                    virt_size = s.Misc_VirtualSize
+                    raw_size = s.SizeOfRawData
+                    if raw_size > 0 and (virt_size / raw_size) > 5.0:
+                        features["VIRTUAL_RAW_SIZE_ANOMALY"] = 1
+                        break
+
+                # 2. Entropy Calculations
+                entropies = [s.get_entropy() for s in sections]
+
+                features["AVG_SECTION_ENTROPY"] = sum(entropies) / len(entropies)
+                features["MAX_SECTION_ENTROPY"] = max(entropies)
+                features["MIN_SECTION_ENTROPY"] = min(entropies)
+
+                mean = features["AVG_SECTION_ENTROPY"]
+                features["SECTION_ENTROPY_STD"] = math.sqrt(
+                    sum((e - mean) ** 2 for e in entropies) / len(entropies)
+                )
+
+                features["NUM_HIGH_ENTROPY_SECTIONS"] = sum(e > 7.2 for e in entropies)
+                features["HAS_HIGH_ENTROPY_SECTION"] = int(features["NUM_HIGH_ENTROPY_SECTIONS"] > 0)
+
+                text_entropy = 0
+                rsrc_entropy = 0
+
+                for s in sections:
+                    name = s.Name.decode(errors="ignore").lower()
+                    if ".text" in name:
+                        text_entropy = s.get_entropy()
+                    if ".rsrc" in name:
+                        rsrc_entropy = s.get_entropy()
+
+                features["TEXT_SECTION_ENTROPY"] = text_entropy
+                features["RSRC_SECTION_ENTROPY"] = rsrc_entropy
+
+            # =============================
+            # PACKING / STRUCTURAL FEATURES
+            # =============================
+            features["LOW_IMPORT_COUNT"] = int(features["NUM_IMPORTS"] < 20)
+            features["SMALL_IMPORT_TABLE"] = int(features["NUM_IMPORTS"] < 10)
+            
+            if sections:
+                features["HIGH_ENTROPY_PACKING"] = int(features["MAX_SECTION_ENTROPY"] > 7.5)
+                features["FEW_SECTIONS"] = int(len(sections) <= 3)
+
+                rsrc_size = 0
+                for s in sections:
+                    if ".rsrc" in s.Name.decode(errors="ignore").lower():
+                        rsrc_size = s.SizeOfRawData
+                features["LARGE_RESOURCE_SECTION"] = int(rsrc_size > 500000)
+
+                try:
+                    entry = pe.OPTIONAL_HEADER.AddressOfEntryPoint
+                    text_section = next(
+                        (s for s in sections if ".text" in s.Name.decode(errors="ignore").lower()),
+                        None
+                    )
+                    if text_section:
+                        start = text_section.VirtualAddress
+                        end = start + text_section.Misc_VirtualSize
+                        features["ENTRYPOINT_OUTSIDE_TEXT"] = int(not(start <= entry <= end))
+                except:
+                    features["ENTRYPOINT_OUTSIDE_TEXT"] = 0
+
+                suspicious = ["upx", "packed", "aspack", "mpress"]
+                features["UNUSUAL_SECTION_NAMES"] = int(
+                    any(any(x in s.Name.decode(errors="ignore").lower() for x in suspicious)
+                        for s in sections)
+                )
+            else:
+                features["HIGH_ENTROPY_PACKING"] = 0
+                features["FEW_SECTIONS"] = 0
+                features["LARGE_RESOURCE_SECTION"] = 0
+                features["ENTRYPOINT_OUTSIDE_TEXT"] = 0
+                features["UNUSUAL_SECTION_NAMES"] = 0
+        finally:
+            pe.close()  # Explicitly release file handle so quarantine can move the file
 
     else:
         # SAFE DEFAULTS IF NOT PE

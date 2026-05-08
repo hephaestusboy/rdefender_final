@@ -1,3 +1,7 @@
 {
-  "items": {}
+  "items": {
+    "d64a0468f5b5b0b0fc5b2188450bcd655b70809d97b1c4535f2884635094377d": "7z2601-x64.exe",
+    "3bc2b06253a7e4957111be152ac6a536e0c7478a706e19da814038db5d706495": "nsis-3.12-setup.exe",
+    "c179f43574c18baa66a940b1112b4a2e2debc5d0e39cf730e8df3339649344e0": "vs_BuildTools (3).exe"
+  }
 }

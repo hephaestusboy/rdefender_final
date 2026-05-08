@@ -76,7 +76,7 @@
 
     <div class="glass controls">
         <button class="btn-start" id="monitorBtn" onclick="toggleMonitoring()">START MONITORING</button>
-        <button class="btn-scan" id="scanFolderBtn" onclick="pywebview.api.scan_folder()">SCAN FOLDER</button>
+        <button class="btn-scan" id="scanFolderBtn" onclick="scanFolder()">SCAN FOLDER</button>
         <button class="btn-recover" onclick="openRecoveryModal()">RECOVER FILES</button>
         <button class="btn-white" onclick="openWhitelistModal()">WHITELIST</button>
     </div>
@@ -133,105 +133,109 @@
     <script>
         let isMonitoring = false;
 
-        function toggleMonitoring() {
-            isMonitoring = !isMonitoring;
-            const btn = document.getElementById("monitorBtn");
-            const dot = document.getElementById("statusDot");
-            const txt = document.getElementById("statusText");
-
-            if(isMonitoring) {
-                btn.innerText = "STOP MONITORING"; btn.style.background = "linear-gradient(135deg, #ef4444, #b91c1c)";
-                dot.style.background = "#22c55e"; dot.style.boxShadow = "0 0 10px #22c55e";
-                txt.innerText = "SYSTEM RUNNING"; txt.style.color = "#22c55e";
-                pywebview.api.start_monitoring();
-            } else {
-                btn.innerText = "START MONITORING"; btn.style.background = "linear-gradient(135deg, #10b981, #059669)";
-                dot.style.background = "#ef4444"; dot.style.boxShadow = "0 0 10px #ef4444";
-                txt.innerText = "SYSTEM STOPPED"; txt.style.color = "#ef4444";
-                pywebview.api.stop_monitoring();
+        async function toggleMonitoring() {
+            const btn = document.getElementById('monitorBtn');
+            const dot = document.getElementById('statusDot');
+            const txt = document.getElementById('statusText');
+            btn.disabled = true;
+            try {
+                if (!isMonitoring) {
+                    const ok = await pywebview.api.start_monitoring();
+                    if (ok) {
+                        isMonitoring = true;
+                        btn.innerText = 'STOP MONITORING';
+                        btn.style.background = 'linear-gradient(135deg, #ef4444, #b91c1c)';
+                        dot.style.background = '#22c55e'; dot.style.boxShadow = '0 0 10px #22c55e';
+                        txt.innerText = 'SYSTEM RUNNING'; txt.style.color = '#22c55e';
+                    }
+                } else {
+                    await pywebview.api.stop_monitoring();
+                    isMonitoring = false;
+                    btn.innerText = 'START MONITORING';
+                    btn.style.background = 'linear-gradient(135deg, #10b981, #059669)';
+                    dot.style.background = '#ef4444'; dot.style.boxShadow = '0 0 10px #ef4444';
+                    txt.innerText = 'SYSTEM STOPPED'; txt.style.color = '#ef4444';
+                }
+            } catch(err) {
+                alert('Failed to toggle monitoring: ' + err);
+            } finally {
+                btn.disabled = false;
             }
         }
 
-        function updateMetrics(cpu, ram, status, statusColor, scans) {
-            document.getElementById("cpuLabel").innerText = cpu + "%";
-            document.getElementById("ramLabel").innerText = ram + " MB";
-            const engStatus = document.getElementById("engineStatus");
-            engStatus.innerText = status; engStatus.style.color = statusColor;
-            document.getElementById("activeScans").innerText = scans;
+        function updateMetrics(cpu, ram, scans) {
+            document.getElementById('cpuLabel').innerText = cpu + '%';
+            document.getElementById('ramLabel').innerText = ram + ' MB';
+            document.getElementById('activeScans').innerText = scans;
         }
 
         function addAlert(time, file, result, action, tagClass) {
-            const tbody = document.getElementById("alertsBody");
-            const tr = document.createElement("tr");
-            tr.innerHTML = `<td style="color: #94a3b8;">${time}</td><td style="font-family: monospace;">${file}</td><td class="tag-${tagClass}">${result}</td><td class="tag-${tagClass}">${action}</td>`;
+            const tbody = document.getElementById('alertsBody');
+            const tr = document.createElement('tr');
+            const timeCell = document.createElement('td'); timeCell.style.color = '#94a3b8'; timeCell.textContent = time;
+            const fileCell = document.createElement('td'); fileCell.style.fontFamily = 'monospace'; fileCell.textContent = file;
+            const resultCell = document.createElement('td'); resultCell.className = `tag-${tagClass}`; resultCell.textContent = result;
+            const actionCell = document.createElement('td'); actionCell.className = `tag-${tagClass}`; actionCell.textContent = action;
+            tr.appendChild(timeCell); tr.appendChild(fileCell); tr.appendChild(resultCell); tr.appendChild(actionCell);
             tbody.insertBefore(tr, tbody.firstChild);
         }
 
-        // --- MODAL LOGIC & MULTI-SELECT ---
         function closeModal(id) { document.getElementById(id).style.display = 'none'; }
-        
+
         function toggleSelectAll(checkboxClass, isChecked) {
             document.querySelectorAll(checkboxClass).forEach(cb => cb.checked = isChecked);
         }
 
+        function scanFolder() { pywebview.api.scan_folder(); }
+
         async function openRecoveryModal() {
-            document.getElementById('selectAllRecovery').checked = false; // Reset select all box
+            document.getElementById('selectAllRecovery').checked = false;
             document.getElementById('recoveryModal').style.display = 'flex';
             const listDiv = document.getElementById('recoveryList');
-            listDiv.innerHTML = "Fetching metadata...";
-            
+            listDiv.innerHTML = 'Fetching quarantine data...';
             const data = await pywebview.api.get_quarantine_data();
-            if (data.length === 0) { listDiv.innerHTML = "Quarantine vault is empty."; return; }
-
-            listDiv.innerHTML = "";
+            if (!data || data.length === 0) { listDiv.innerHTML = 'Quarantine vault is empty.'; return; }
+            listDiv.innerHTML = '';
             data.forEach(item => {
-                const color = item.severity === "MALWARE" ? "#ef4444" : "#facc15";
-                listDiv.innerHTML += `
-                    <label class="modal-item">
-                        <input type="checkbox" value="${item.id}" class="recover-check">
-                        <span style="color: ${color}; font-weight: bold;">[${item.severity}]</span>
-                        <span style="color: white;">${item.name}</span>
-                        <span style="color: #64748b; font-size: 11px;">(${item.path})</span>
-                    </label>
-                `;
+                const color = item.severity === 'MALWARE' ? '#ef4444' : '#facc15';
+                const safeId = item.id.replace(/"/g, '&quot;');
+                const safeName = item.name.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                const safePath = item.path.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                listDiv.innerHTML += `<label class="modal-item"><input type="checkbox" value="${safeId}" class="recover-check"><span style="color:${color};font-weight:bold">[${item.severity}]</span> <span style="color:white">${safeName}</span> <span style="color:#64748b;font-size:11px">(${safePath})</span></label>`;
             });
         }
 
         async function executeRecovery() {
             const checked = Array.from(document.querySelectorAll('.recover-check:checked')).map(cb => cb.value);
-            if (checked.length === 0) return;
-            document.getElementById('recoveryList').innerHTML = "Restoring files...";
+            if (checked.length === 0) { alert('Please select files to recover.'); return; }
+            document.getElementById('recoveryList').innerHTML = 'Restoring files...';
             await pywebview.api.execute_recovery(checked);
-            closeModal('recoveryModal');
+            alert(`Successfully recovered ${checked.length} file(s)`);
+            openRecoveryModal();
         }
 
         async function openWhitelistModal() {
-            document.getElementById('selectAllWhitelist').checked = false; // Reset select all box
+            document.getElementById('selectAllWhitelist').checked = false;
             document.getElementById('whitelistModal').style.display = 'flex';
             const listDiv = document.getElementById('whitelistList');
-            listDiv.innerHTML = "Fetching whitelist...";
-            
+            listDiv.innerHTML = 'Fetching whitelist...';
             const data = await pywebview.api.get_whitelist_data();
-            if (data.length === 0) { listDiv.innerHTML = "Whitelist is empty."; return; }
-
-            listDiv.innerHTML = "";
+            if (!data || data.length === 0) { listDiv.innerHTML = 'Whitelist is empty.'; return; }
+            listDiv.innerHTML = '';
             data.forEach(item => {
-                listDiv.innerHTML += `
-                    <label class="modal-item">
-                        <input type="checkbox" value="${item.hash}" class="whitelist-check">
-                        <span style="color: #3b82f6; font-weight: bold; width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${item.name}</span>
-                        <span style="color: #94a3b8; font-size: 11px;">${item.hash}</span>
-                    </label>
-                `;
+                const safeHash = item.hash.replace(/"/g, '&quot;');
+                const safeName = item.name.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                listDiv.innerHTML += `<label class="modal-item"><input type="checkbox" value="${safeHash}" class="whitelist-check"><span style="color:#3b82f6;font-weight:bold">${safeName}</span> <span style="color:#94a3b8;font-size:11px">${safeHash}</span></label>`;
             });
         }
 
         async function executeWhitelistRemoval() {
             const checked = Array.from(document.querySelectorAll('.whitelist-check:checked')).map(cb => cb.value);
-            if (checked.length === 0) return;
-            document.getElementById('whitelistList').innerHTML = "Removing hashes...";
+            if (checked.length === 0) { alert('Please select items to remove from whitelist.'); return; }
+            document.getElementById('whitelistList').innerHTML = 'Removing hashes...';
             await pywebview.api.execute_whitelist_removal(checked);
-            closeModal('whitelistModal');
+            alert(`Successfully removed ${checked.length} item(s) from whitelist`);
+            openWhitelistModal();
         }
     </script>
 </body>

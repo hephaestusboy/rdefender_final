@@ -96,42 +96,47 @@ def save_quarantine_metadata(metadata):
         pass
 
 def quarantine_file(filepath, label):
-    max_retries = 8
-    retry_delay = 1.5
     target_dir = QUARANTINE_MALWARE if label == "MALWARE" else QUARANTINE_SUSPICIOUS
+
+    # Strip .scanning suffix to get the real original path for metadata
+    original_path = filepath.replace(".scanning", "") if filepath.endswith(".scanning") else filepath
 
     try:
         os.makedirs(target_dir, exist_ok=True)
         os.makedirs(QUARANTINE_ROOT, exist_ok=True)
 
-        filename        = os.path.basename(filepath)
+        filename        = os.path.basename(original_path)
         timestamp       = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         safe_filename   = f"{os.path.splitext(filename)[0]}.{timestamp}.quarantine"
         quarantine_path = os.path.join(target_dir, safe_filename)
 
+        # Use the actual file on disk (may be .scanning or original name)
+        source = filepath if os.path.exists(filepath) else original_path
+        if not os.path.exists(source):
+            return None
+
+        # Force GC to release any file handles from the scan
+        import gc
+        gc.collect()
+
+        max_retries = 5
         for attempt in range(max_retries):
             try:
-                shutil.move(filepath, quarantine_path)
-                print(f"\033[91m[QUARANTINED] {filename} moved to {label} vault!\033[0m")
+                shutil.move(source, quarantine_path)
+                print(f"\033[91m[QUARANTINED] {filename} -> {label} vault\033[0m")
                 metadata = load_quarantine_metadata()
                 metadata[safe_filename] = {
-                    "original_path": filepath,
+                    "original_path": original_path,
                     "timestamp": timestamp,
                     "severity": label
                 }
                 save_quarantine_metadata(metadata)
                 return quarantine_path
             except PermissionError:
-                print(f"\033[93m[WARNING] File locked, retrying quarantine (Attempt {attempt+1}/{max_retries})...\033[0m")
-                time.sleep(retry_delay)
+                time.sleep(0.3 * (attempt + 1))
 
-        print("\033[93m[WARNING] Attempting active file permission lockdown...\033[0m")
-        try:
-            os.chmod(filepath, stat.S_IREAD | stat.S_IWRITE)
-            os.chmod(filepath, 0)
-            return "LOCKED_BUT_DEFANGED"
-        except Exception:
-            return None
+        print(f"\033[93m[WARNING] Could not quarantine {filename} after {max_retries} attempts.\033[0m")
+        return None
 
     except Exception as e:
         print(f"\033[95m[ERROR] QUARANTINE ERROR: {str(e)}\033[0m")
@@ -258,7 +263,6 @@ class MLScannerEngine:
                     extreme_behavior    = (avg_behavior > 0.75) and (avg_artifact < 0.30) and raw_signed == 0
                     consensus_suspicion = (p_rf_b > 0.30 and p_rf_a > 0.30
                                           and p_xgb_b > 0.30 and p_xgb_a > 0.30)
-                    # shadow_del requires meaningful behavior signal to avoid low-signal FPs
                     shadow_override     = raw_shadow == 1 and avg_behavior > 0.15
 
                     if shadow_override or extreme_artifact or extreme_behavior or consensus_suspicion:
@@ -269,7 +273,6 @@ class MLScannerEngine:
                     else:
                         label = "CLEAN"
 
-                # signed-file FP suppression
                 if label == "MALWARE" and raw_signed == 1 and final_prob < 0.98:
                     label = "SUSPICIOUS"
 
@@ -277,7 +280,10 @@ class MLScannerEngine:
 
             except PermissionError:
                 time.sleep(0.2)
+            except ValueError:
+                return "SKIP", 0.0
             except Exception as e:
+                print(f"[SCAN ERROR] {os.path.basename(filepath)}: {type(e).__name__}: {e}")
                 return "ERROR", str(e)
 
         return "ERROR", "File locked by another process after 3 retries."

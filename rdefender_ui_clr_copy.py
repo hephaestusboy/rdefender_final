@@ -91,14 +91,17 @@ class RDefenderAPI:
         self._scanner = MLScannerEngine()
         
         self._start_queue_workers()
-        threading.Thread(target=self._metrics_loop, daemon=True).start()
 
     def set_window(self, window):
         self._window = window
+        threading.Thread(target=self._metrics_loop, daemon=True).start()
         self._update_ui_status("LOADED & READY", "#22c55e")
 
     # --- PUBLIC JAVASCRIPT CALLABLE METHODS (NO UNDERSCORES) ---
     def start_monitoring(self):
+        if not self._window:
+            print("[ERROR] Window not ready for monitoring")
+            return False
         if not self._monitoring:
             self._monitoring = True
             self._update_ui_status("ACTIVE SCANNING", "#22c55e")
@@ -106,6 +109,8 @@ class RDefenderAPI:
             self._observer = Observer()
             self._observer.schedule(event_handler, TARGET_WATCH_DIR, recursive=True)
             self._observer.start()
+            return True
+        return False
 
     def stop_monitoring(self):
         self._monitoring = False
@@ -114,6 +119,7 @@ class RDefenderAPI:
             self._observer.stop()
             self._observer.join()
             self._observer = None
+        return True
 
     def scan_folder(self):
         if not self._window: return
@@ -130,12 +136,12 @@ class RDefenderAPI:
             self._cancel_folder_scan = False
             
             # Morph the UI button into a red CANCEL button
-            self._window.evaluate_js("""
+            self._safe_js(f"""
                 var btn = document.getElementById('scanFolderBtn');
-                if (btn) {
+                if (btn) {{
                     btn.innerText = 'CANCEL SCAN';
                     btn.style.background = 'linear-gradient(135deg, #ef4444, #b91c1c)';
-                }
+                }}
             """)
             
             threading.Thread(target=self._scan_folder_worker, args=(folder[0],), daemon=True).start()
@@ -148,14 +154,18 @@ class RDefenderAPI:
             with open(METADATA_FILE, 'r') as f: meta = json.load(f)
             data_list = []
             for q_id, info in meta.items():
+                original_path = info.get("original_path", "Unknown")
                 data_list.append({
                     "id": q_id,
-                    "name": os.path.basename(info.get("original_path", "Unknown")),
-                    "path": info.get("original_path", "Unknown"),
+                    "name": os.path.basename(original_path),
+                    "path": original_path,
                     "severity": info.get("severity", "Unknown")
                 })
+            print(f"[DEBUG] Quarantine data loaded: {len(data_list)} items")
             return data_list
-        except Exception: return []
+        except Exception as e:
+            print(f"[ERROR] Failed to load quarantine data: {e}")
+            return []
 
     def execute_recovery(self, selected_ids):
         """Receives checked items from HTML, moves them back, and updates whitelist dictionary."""
@@ -190,7 +200,7 @@ class RDefenderAPI:
                         del meta[q_id]
                         time_str = datetime.now().strftime("%H:%M:%S")
                         if self._window:
-                            self._window.evaluate_js(f"addAlert('{time_str}', '{os.path.basename(original_path)}', 'RESTORED', 'Un-Quarantined', 'clean');")
+                            self._safe_js(f"addAlert('{time_str}', '{os.path.basename(original_path)}', 'RESTORED', 'Un-Quarantined', 'clean');")
                     except Exception as e: print(f"Restore failed: {e}")
 
             with open(METADATA_FILE, 'w') as f: json.dump(meta, f, indent=2)
@@ -200,7 +210,9 @@ class RDefenderAPI:
         """Sends whitelist hashes AND names to HTML Modal."""
         with self._whitelist_lock:
             # Send an array of objects to javascript
-            return [{"hash": k, "name": v} for k, v in self._whitelist.items()]
+            data = [{"hash": k, "name": v} for k, v in self._whitelist.items()]
+            print(f"[DEBUG] Whitelist data loaded: {len(data)} items")
+            return data
 
     def execute_whitelist_removal(self, selected_hashes):
         """Receives checked hashes from HTML and removes them from the dictionary."""
@@ -216,7 +228,7 @@ class RDefenderAPI:
 
     def _process_queue_loop(self):
         while True:
-            filepath = self._file_queue.get() 
+            filepath = self._file_queue.get()
             try: self._process_file(filepath)
             except Exception: pass
             finally: self._file_queue.task_done()
@@ -253,16 +265,20 @@ class RDefenderAPI:
         original_path = locked_path.replace(".scanning", "")
         name = os.path.basename(original_path)
 
-        if LOG_FILE.lower() in name.lower(): return
+        if LOG_FILE.lower() in name.lower():
+            try: os.rename(locked_path, original_path)
+            except: pass
+            return
 
         with self._active_scans_lock: self._active_scans.add(name)
 
         try:
             label, score = self._scanner.scan_file(locked_path)
-            if label == "ERROR":
+            if label in ("ERROR", "SKIP"):
                 result_str, action, tag = "SCAN FAILED", "Ignored", "error"
-                try: os.rename(locked_path, original_path) 
+                try: os.rename(locked_path, original_path)
                 except: pass
+                if label == "SKIP": return  # silently skip non-PE files
             else:
                 score_pct = float(score) * 100
                 result_str = f"{label} ({score_pct:.1f}%)"
@@ -270,18 +286,27 @@ class RDefenderAPI:
                     tag = "malware"
                     success = quarantine_file(locked_path, label)
                     action = "QUARANTINED" if success else "Q-FAILED (LOCKED)"
+                    if not success:
+                        try: os.rename(locked_path, original_path)
+                        except: pass
                 elif label == "SUSPICIOUS":
-                    action, tag = "Logged/Flagged", "suspicious"
-                    quarantine_file(locked_path, label)
+                    tag = "suspicious"
+                    success = quarantine_file(locked_path, label)
+                    action = "Logged/Flagged"
+                    if not success:
+                        try: os.rename(locked_path, original_path)
+                        except: pass
                 else:
                     action, tag = "Allowed", "clean"
-                    try: os.rename(locked_path, original_path)
-                    except: pass
+                    # quarantine_file already renamed back; if not quarantined, rename back here
+                    if os.path.exists(locked_path):
+                        try: os.rename(locked_path, original_path)
+                        except: pass
 
             time_str = datetime.now().strftime("%H:%M:%S")
             if self._window:
-                js_code = f"addAlert('{time_str}', '{name}', '{result_str}', '{action}', '{tag}');"
-                self._window.evaluate_js(js_code)
+                params = json.dumps([time_str, name, result_str, action, tag])
+                self._safe_js(f"addAlert(...{params});")
         finally:
             with self._active_scans_lock: self._active_scans.discard(name)
 
@@ -291,19 +316,28 @@ class RDefenderAPI:
 
     def _metrics_loop(self):
         while True:
+            time.sleep(1)
             if self._window:
                 try:
                     cpu = f"{self._agent_process.cpu_percent(interval=None):.2f}"
                     mem = f"{self._agent_process.memory_info().rss / (1024 * 1024):.2f}"
                     with self._active_scans_lock:
                         scans = "None" if not self._active_scans else "Scanning: " + " | ".join(list(self._active_scans)[:4])
-                    self._window.evaluate_js(f"updateMetrics('{cpu}', '{mem}', document.getElementById('engineStatus').innerText, document.getElementById('engineStatus').style.color, '{scans}')")
-                except Exception: pass
-            time.sleep(1)
+                    params = json.dumps([cpu, mem, scans])
+                    self._safe_js(f"updateMetrics(...{params})")
+                except Exception as e:
+                    print(f"[METRICS ERROR] {e}")
+
+    def _safe_js(self, js):
+        try:
+            if self._window:
+                self._window.run_js(js)
+        except Exception as e:
+            print(f"[JS ERROR] {e}")
 
     def _update_ui_status(self, text, color):
-        if self._window:
-            self._window.evaluate_js(f"document.getElementById('engineStatus').innerText = '{text}'; document.getElementById('engineStatus').style.color = '{color}';")
+        safe_text = json.dumps(text)
+        self._safe_js(f"document.getElementById('engineStatus').innerText = {safe_text}; document.getElementById('engineStatus').style.color = '{color}';")
 
     def _scan_folder_worker(self, folder_path):
         self._update_ui_status(f"FOLDER SCAN ACTIVE ({folder_path})", "#a855f7")
@@ -330,31 +364,38 @@ class RDefenderAPI:
                     name = os.path.basename(filepath)
                     with self._active_scans_lock: self._active_scans.add(f"[FOLDER] {name}")
 
-                    try:
-                        label, score = self._scanner.scan_file(filepath)
-                        if label == "ERROR": continue
+                    label, score = self._scanner.scan_file(filepath)
 
-                        score_pct = float(score) * 100
-                        result_str = f"{label} ({score_pct:.1f}%)"
+                    with self._active_scans_lock: self._active_scans.discard(f"[FOLDER] {name}")
 
-                        if label == "MALWARE":
-                            detected_count += 1
-                            tag = "malware"
-                            success = quarantine_file(filepath, label)
-                            action = "QUARANTINED" if success else "Q-FAILED (LOCKED)"
-                        elif label == "SUSPICIOUS":
-                            detected_count += 1
-                            action, tag = "Logged/Flagged", "suspicious"
-                            quarantine_file(filepath, label)
-                        else:
-                            action, tag = "Allowed", "clean"
+                    if label in ("ERROR", "SKIP"):
+                        continue
 
-                        time_str = datetime.now().strftime("%H:%M:%S")
-                        if self._window:
-                            self._window.evaluate_js(f"addAlert('{time_str}', '{name}', '{result_str}', '{action}', '{tag}');")
-                    finally:
-                        with self._active_scans_lock: self._active_scans.discard(f"[FOLDER] {name}")
-                except Exception: pass
+                    score_pct = float(score) * 100
+                    result_str = f"{label} ({score_pct:.1f}%)"
+
+                    if label == "MALWARE":
+                        detected_count += 1
+                        tag = "malware"
+                        success = quarantine_file(filepath, label)
+                        action = "QUARANTINED" if success else "Q-FAILED (LOCKED)"
+                    elif label == "SUSPICIOUS":
+                        detected_count += 1
+                        tag = "suspicious"
+                        quarantine_file(filepath, label)
+                        action = "Logged/Flagged"
+                    else:
+                        action, tag = "Allowed", "clean"
+
+                    time_str = datetime.now().strftime("%H:%M:%S")
+                    if self._window:
+                        folder_name = f"[FOLDER] {name}"
+                        params = json.dumps([time_str, folder_name, result_str, action, tag])
+                        self._safe_js(f"addAlert(...{params});")
+
+                except Exception as e:
+                    with self._active_scans_lock: self._active_scans.discard(f"[FOLDER] {os.path.basename(filepath)}")
+                    print(f"[FOLDER SCAN ERROR] {file}: {e}")
 
         # --- CLEANUP STUCK .SCANNING FILES IN SCANNED FOLDER ---
         try:
@@ -373,25 +414,25 @@ class RDefenderAPI:
         self._update_ui_status("ACTIVE SCANNING" if self._monitoring else "IDLE", "#22c55e" if self._monitoring else "#facc15")
         
         if self._window:
-            self._window.evaluate_js(f"""
+            self._safe_js(f"""
                 var btn = document.getElementById('scanFolderBtn');
                 if (btn) {{
                     btn.innerText = 'SCAN FOLDER';
                     btn.style.background = 'linear-gradient(135deg, #8b5cf6, #6d28d9)';
                 }}
                 alert('Folder Scan Stopped/Finished!\\n\\nDetected Threats: {detected_count}');
+                if (document.getElementById('recoveryModal').style.display === 'flex') {{
+                    openRecoveryModal();
+                }}
             """)
 
 
 # ==========================================
 # LAUNCH THE WEBVIEW APP
 # ==========================================
-def on_window_ready(window, api_instance):
-    api_instance.set_window(window)
-
 if __name__ == '__main__':
     api = RDefenderAPI()
-    
+
     window = webview.create_window(
         title='RDefender',
         url='gui/index.html',
@@ -400,5 +441,9 @@ if __name__ == '__main__':
         height=750,
         background_color='#0f172a'
     )
-    
-    webview.start(on_window_ready, (window, api))
+
+    def on_loaded():
+        api.set_window(window)
+
+    window.events.loaded += on_loaded
+    webview.start(gui='edgechromium')
